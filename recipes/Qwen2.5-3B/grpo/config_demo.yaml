@@ -1,11 +1,11 @@
 # Model arguments
-model_name_or_path: Qwen/Qwen2.5-3B
+model_name_or_path: /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B
 model_revision: main
 torch_dtype: bfloat16
 attn_implementation: flash_attention_2
 
 # Data training arguments
-dataset_name: DigitalLearningGmbH/MATH-lighteval
+dataset_name: /run/determined/NAS1/public/xuexiang/dataset/MATH-lighteval
 dataset_config: default
 dataset_prompt_column: problem
 system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process step by step and then provide the user with the answer. Please enclose your final answer in the box: \\boxed{Your Answer}. Please stop generation immediately after outputing the box."
@@ -29,8 +29,8 @@ logging_strategy: steps
 lr_scheduler_type: cosine
 max_prompt_length: 512
 max_completion_length: 3072
-max_steps: -1
-num_generations: 7
+max_steps: 10
+num_generations: 8
 num_train_epochs: 1
 num_iterations: 1
 output_dir: data/Qwen2.5-GRPO-3B

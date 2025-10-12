@@ -842,21 +842,21 @@ class INTUITORTrainer(Trainer):
         batch_size = batch_size or input_ids.size(0)
         all_sce = []
         # Process inputs in chunks
-        for i in range(0, input_ids.size(0), batch_size):
+        for i in range(0, input_ids.size(0), batch_size):   # input_ids.size(0)=4*8, batch_size=4
             input_ids_batch = input_ids[i : i + batch_size]
             attention_mask_batch = attention_mask[i : i + batch_size]
 
             # Get logits: shape (B, seq_len, V)
             logits = model(input_ids=input_ids_batch, attention_mask=attention_mask_batch).logits
             # Keep only the last `logits_to_keep` positions
-            sce_chunk = logits[:, -logits_to_keep:, :]  # (B, L_keep, V)
+            sce_chunk = logits[:, -logits_to_keep:, :]  # (B, L_keep, V) 只有completion部分的logits
             # Compute log-sum-exp across vocabulary and subtract mean logit
             # logsumexp - mean gives a measure of dispersion (self-certainty)
-            sce_values = torch.logsumexp(sce_chunk, dim=-1) - sce_chunk.mean(dim=-1)
+            sce_values = torch.logsumexp(sce_chunk, dim=-1) - sce_chunk.mean(dim=-1)    # (B, L_keep) 计算每个token的self-certainty 
             all_sce.append(sce_values)
 
         # Concatenate over batch dimension
-        return torch.cat(all_sce, dim=0)
+        return torch.cat(all_sce, dim=0)    # (B * num_generation, L_keep)
 
     
     @profiling_decorator
@@ -879,11 +879,12 @@ class INTUITORTrainer(Trainer):
         -------
         advantage : (B,) tensor 
         """
-        output_lengths = completion_mask.sum(dim=1, dtype=torch.long) # (B,)
-        advantage = torch.zeros(SCe.size(0), device=SCe.device, dtype=SCe.dtype)
-        valid_mask = output_lengths > 0
+        output_lengths = completion_mask.sum(dim=1, dtype=torch.long) # (B,)   # 计算每个completion的有效长度
+        advantage = torch.zeros(SCe.size(0), device=SCe.device, dtype=SCe.dtype)    
+        valid_mask = output_lengths > 0 # 过滤掉空的completion，valid_mask = torch.tensor([True, False, True, False]) # 有效掩码
         if valid_mask.any():
             sce_sum = (SCe * completion_mask).sum(dim=1)
+            # 当valid_mask为True时，计算advantage，valid_mask=False的时候，不操作，直接把对应的advantage赋值为0
             advantage[valid_mask] = sce_sum[valid_mask] / output_lengths[valid_mask].to(SCe.dtype)
         return advantage.detach()
 
@@ -1039,13 +1040,30 @@ class INTUITORTrainer(Trainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Mask everything after the first EOS token
+        # 样本1: [10, 20, 2, 30, 40]  # EOS在位置2
+        # 样本2: [15, 25, 35, 45]     # 没有EOS
+        # is_eos: [[False, False, True, False, False],
+        #         [False, False, False, False]]
+        # eos_idx: [2, 4]  # 样本1的EOS在位置2，样本2没有EOS（设为序列长度4）
+        # completion_mask: [[1, 1, 1, 0, 0],  # 位置2（EOS）及之后被屏蔽
+        #                 [1, 1, 1, 1]]     # 没有EOS，全部保留
         is_eos = completion_ids == self.processing_class.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            # eos_idx现在包含每个样本第一个EOS token的位置，没有EOS的样本保持序列长度
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
+        # 使用截断，例如一个句子没有EOS，那么就说明这个句子没有说完，拿来训练效果肯定不好，就将其掩码都设置为0
+            # 样本1: [10, 20, 2, 30]    # 正常结束（EOS在位置2）
+            # 样本2: [15, 25, 35]       # 被截断（无EOS）
+            # 样本3: [12, 22, 2, 32]    # 正常结束（EOS在位置2）
+            # is_eos.any(dim=1) = [True, False, True]  # 样本2被截断
+            # truncated_completions = [False, True, False]  # 样本2被标记为截断
+            # (~truncated_completions) = [True, False, True]  # 取反
+            # 扩展后: [[1], [0], [1]]  # unsqueeze(1)结果
+            # 最终completion_mask: 原掩码 * [[1,1,1,1], [0,0,0], [1,1,1,1]]
         if self.mask_truncated_completions:
             truncated_completions = ~is_eos.any(dim=1)
             completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
@@ -1063,9 +1081,13 @@ class INTUITORTrainer(Trainer):
                 old_per_token_logps = self._get_per_token_logps(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
-            else:
+            else:   # 只迭代一次，不需要保存旧策略
                 old_per_token_logps = None
-            
+            # 计算每个 token 的自确信度
+            # 这里的batch_size是4*8还是一个句子的8个generation? 4*8
+            # 自确信度和优势的shape呢？
+            # 自确信度是 (Batch * num_generation, logits_to_keep)，每个句子的completion部分都被扩展为logits_to_keep个token
+            # 优势是将每个completion的有效token的自确信度加起来取平均，作为该句子的自确信度，然后计算每个句子的优势值，形状为(Batch * num_generation, )
             sce_advantage_raw = self._get_per_token_self_certainty(
                 self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
             )
@@ -1097,6 +1119,7 @@ class INTUITORTrainer(Trainer):
             completions = completions_text
         
         rewards_per_func = torch.zeros(len(prompts), max(len(self.reward_funcs),1), device=device)
+        # intuitor里面的reward_func=accuracy 但是 weights=0
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
         ):
@@ -1185,7 +1208,7 @@ class INTUITORTrainer(Trainer):
         std_sce_advantage_mean = std_sce_advantage_mean[process_slice]
         sce_advantage = (sce_advantage_raw - mean_sce_advantage_mean)
         sce_advantage = sce_advantage / (std_sce_advantage_mean + 1e-4)
-        
+        # 这里的 advantages 是上面的 reward_func 计算的，但是由于作者只用自确信度，因此advantages = 0
         sce_advantage = sce_advantage + advantages
         
         # Log the metrics
@@ -1251,31 +1274,34 @@ class INTUITORTrainer(Trainer):
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]   # (B, prompt_len)
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]   
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, seq_len)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        # (batch_size, sequence_length) 表明每个 completion token 的概率值的对数
+        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)  # (B, logits_to_keep)
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
+            # KL 散度的一阶泰勒近似，这里是逐token计算的，相当于上面的B * logits_to_keep 个 token 分别计算 KL 散度
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
 
         # Compute the loss
-        advantages = inputs["advantages"].unsqueeze(1)  # (B, 1)
+        advantages = inputs["advantages"].unsqueeze(1)  # (B, 1) 句子级别的优势
         # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
         # _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
+        # 重要性采样比率，per_token_logps已经取过对数了，因此前面要用torch.exp()， coef_1 = π_θ(a|s) / π_θ_old(a|s) = exp(log π_θ(a|s) - log π_θ_old(a|s))
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        # 一个completion的所有token共用优势，但是系数不同，有高有低，取决于重要性采样和clip
         per_token_loss1 = coef_1 * advantages
         per_token_loss2 = coef_2 * advantages
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)   # 使用最小值，advantages > 0时，避免过于激进；<0时限制惩罚
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 

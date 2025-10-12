@@ -10,18 +10,22 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.
+# limitations under the License.__
 
 import logging
 import os
 import sys
-
+import torch, functools
+# 全局把 torch.load 默认 weights_only=False
+orig_load = torch.load
+torch.load = functools.partial(orig_load, weights_only=False)
 import datasets
 import transformers
 from datasets import load_dataset
 from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint
-
+import sys
+sys.path.append("/home/wenxuexiang/projects/Intuitor/open-r1-intuitor/src")
 from open_r1.configs import GRPOConfig, GRPOScriptArguments
 from open_r1.rewards import get_reward_funcs
 from open_r1.utils import get_model, get_tokenizer

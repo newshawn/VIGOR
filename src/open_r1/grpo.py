@@ -15,7 +15,10 @@
 import logging
 import os
 import sys
-
+import torch, functools
+# 全局把 torch.load 默认 weights_only=False
+orig_load = torch.load
+torch.load = functools.partial(orig_load, weights_only=False)
 import datasets
 import transformers
 from datasets import load_dataset
