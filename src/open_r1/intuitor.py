@@ -126,6 +126,15 @@ def main(script_args, training_args, model_args):
         processing_class=tokenizer,
     )
 
+    # Log whether PEFT/LoRA adapters are active before training starts.
+    if hasattr(trainer.model, "print_trainable_parameters"):
+        logger.info("PEFT adapters detected. Trainable parameter summary:")
+        trainer.model.print_trainable_parameters()
+    else:
+        logger.warning(
+            "PEFT adapters not detected on the model. Training will update all model parameters."
+        )
+
     ###############
     # Training loop
     ###############

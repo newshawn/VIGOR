@@ -22,8 +22,8 @@ num_generations=7
 if [ "$NUM_PROCESSES" -eq 7 ]; then
     CUDA_DEVICES="1,2,3,4,5,6,7"
     BATCH_SIZE=2
-    GRAD_ACCUM=32
-    lr=1.5e-06
+    GRAD_ACCUM=64
+    lr=3e-06
 else
     CUDA_DEVICES="1,2,3"
     BATCH_SIZE=4
