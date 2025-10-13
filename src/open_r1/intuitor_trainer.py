@@ -894,7 +894,7 @@ class INTUITORTrainer(Trainer):
         completion_labels = completion_ids.clone()
         completion_labels = completion_labels.masked_fill(completion_mask == 0, -100)
         labels = torch.cat([prompt_labels, completion_labels], dim=1)
-
+        # eta 是 KL 奖励的缩放因子，通常设置为学习率
         eta = getattr(self, "kl_reward_eta", None)
         if eta is None:
             eta = getattr(self.args, "learning_rate", 1.0)
@@ -1121,7 +1121,7 @@ class INTUITORTrainer(Trainer):
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
-
+        # 计算kl奖励
         kl_rewards = self._compute_gradient_kl_reward(
             self.model, prompt_ids, prompt_mask, completion_ids, completion_mask
         ).detach()
