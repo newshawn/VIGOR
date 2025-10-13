@@ -4,20 +4,6 @@ model_revision: main
 torch_dtype: bfloat16
 attn_implementation: flash_attention_2
 
-# LoRA arguments (full precision base model)
-use_peft: true
-lora_r: 16
-lora_alpha: 32
-lora_dropout: 0.05
-lora_target_modules:
-  - q_proj
-  - k_proj
-  - v_proj
-  - o_proj
-  - up_proj
-  - down_proj
-  - gate_proj
-
 # Data training arguments
 dataset_name: /run/determined/NAS1/public/xuexiang/dataset/MATH-lighteval
 dataset_config: default

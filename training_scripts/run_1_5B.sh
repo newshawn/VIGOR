@@ -14,10 +14,11 @@ export WANDB_MODE=offline
 export ACCELERATE_LOG_LEVEL=info
 # 设置中国时区
 # export TZ='Asia/Shanghai'
-num_generations=7 # 作者使用7，但是3卡时候用7会犯错
-NUM_PROCESSES=7
+num_generations=3 # 作者使用7，但是3卡时候用7会犯错
+NUM_PROCESSES=3
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
+
 # 根据GPU数量设置CUDA设备和batch参数
 # 目前仅使用4090，7卡或者3卡
 if [ "$NUM_PROCESSES" -eq 7 ]; then
@@ -27,8 +28,8 @@ if [ "$NUM_PROCESSES" -eq 7 ]; then
     lr=3.0e-06
 else
     CUDA_DEVICES="1,2,3"
-    BATCH_SIZE=4
-    GRAD_ACCUM=32
+    BATCH_SIZE=1
+    GRAD_ACCUM=1
     lr=3.0e-06
 fi
 
@@ -41,11 +42,24 @@ if [ "$EXP_TYPE" = "grpo" ]; then
     LOG_PREFIX="grpo"
 else
     SCRIPT_PATH="src/open_r1/intuitor.py"
-    CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo.yaml"
+    CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo_lora.yaml"
     WANDB_PROJECT="open-r1-intuitor"
     RUN_NAME="Qwen2.5-Intuitor-1.5B"
     LOG_PREFIX="intuitor"
 fi
+
+
+# 创建日志目录
+# TIMESTAMP=$(date -d "+8 hour" +"%Y%m%d_%H%M%S")
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+LOG_DIR="logs/${LOG_PREFIX}_${NUM_PROCESSES}_1.5B/${TIMESTAMP}"
+mkdir -p "$LOG_DIR"
+
+# 模型 checkpoint 输出目录（带时间戳，避免覆盖）
+BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B"
+OUTPUT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
+mkdir -p "$OUTPUT_DIR"
+
 # 显示当前配置参数
 echo "===== 当前配置参数 ====="
 echo "NUM_PROCESSES: $NUM_PROCESSES"
@@ -59,14 +73,15 @@ echo "CONFIG_FILE: $CONFIG_FILE"
 echo "WANDB_PROJECT: $WANDB_PROJECT"
 echo "RUN_NAME: $RUN_NAME"
 echo "LOG_PREFIX: $LOG_PREFIX"
+echo "LOG_DIR: $LOG_DIR"
 echo "num_generations: $num_generations"
+echo "OUTPUT_DIR: $OUTPUT_DIR" >> "$PARAM_LOG"
 echo "========================"
 
-# 创建日志目录
-# TIMESTAMP=$(date -d "+8 hour" +"%Y%m%d_%H%M%S")
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_DIR="logs/${LOG_PREFIX}_${NUM_PROCESSES}_1.5B/${TIMESTAMP}"
-mkdir -p "$LOG_DIR"
+# 启动GPU监控（每5秒记录一次）
+nohup bash scripts/gpu_monitor.sh 5 "gpu_usage" "${LOG_DIR}" > /dev/null 2>&1 &
+MONITOR_PID=$!
+echo "GPU监控已启动 PID: $MONITOR_PID"
 
 # 记录配置参数到日志文件
 PARAM_LOG="${LOG_DIR}/config_params.log"
@@ -83,12 +98,7 @@ echo "RUN_NAME: $RUN_NAME" >> "$PARAM_LOG"
 echo "LOG_PREFIX: $LOG_PREFIX" >> "$PARAM_LOG"
 echo "LOG_DIR: $LOG_DIR" >> "$PARAM_LOG"
 echo "num_generations: $num_generations" >> "$PARAM_LOG"
-
-# 启动GPU监控（每5秒记录一次）
-nohup bash scripts/gpu_monitor.sh 5 "gpu_usage" "${LOG_DIR}" > /dev/null 2>&1 &
-MONITOR_PID=$!
-echo "GPU监控已启动 PID: $MONITOR_PID"
-
+echo "OUTPUT_DIR: $OUTPUT_DIR" >> "$PARAM_LOG"
 
 
 # 启动 vllm
