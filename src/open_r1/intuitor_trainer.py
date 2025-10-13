@@ -1247,13 +1247,13 @@ class INTUITORTrainer(Trainer):
         reward_advantages_all = advantages.detach().clone()
         advantages = advantages[process_slice]
 
-        gathered_kl_rewards = gathered_kl_rewards.view(-1, self.num_generations)
-        mean_kl_rewards = gathered_kl_rewards.mean(dim=1)
+        gathered_kl_rewards = gathered_kl_rewards.view(-1, self.num_generations)    # (prompt_group, num_generations)
+        mean_kl_rewards = gathered_kl_rewards.mean(dim=1)   # (prompt_group,) 每个 prompt 小组内部做均值
         std_kl_rewards = gathered_kl_rewards.std(dim=1)
 
-        kl_reward_record = mean_kl_rewards.mean().item()
-        kl_reward_std_record = std_kl_rewards.mean().item()
-
+        kl_reward_record = mean_kl_rewards.mean().item()    # 计算所有 prompt 组的平均 KL 奖励
+        kl_reward_std_record = std_kl_rewards.mean().item()    # 计算所有 prompt 组的平均 KL 奖励标准差
+        # 会将每个元素重复 num_generations 次。如果 mean_kl_rewards = [0.5, 0.3, 0.8] 且 num_generations = 4，结果将是 [0.5, 0.5, 0.5, 0.5, 0.3, 0.3, 0.3, 0.3, 0.8, 0.8, 0.8, 0.8]
         mean_kl_rewards = mean_kl_rewards.repeat_interleave(self.num_generations, dim=0)
         std_kl_rewards = std_kl_rewards.repeat_interleave(self.num_generations, dim=0)
 
@@ -1264,7 +1264,7 @@ class INTUITORTrainer(Trainer):
         # Local slices for loss computation
         mean_kl_rewards = mean_kl_rewards[process_slice]
         std_kl_rewards = std_kl_rewards[process_slice]
-
+        # 逐个元素相减，计算 KL 奖励的优势
         kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)
         total_advantage = kl_advantage + advantages
         
