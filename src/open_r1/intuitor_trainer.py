@@ -927,14 +927,15 @@ class INTUITORTrainer(Trainer):
                     create_graph=False,
                     allow_unused=True,
                 )
+            grad_norm = torch.sqrt(sum([(g**2).sum() for g in grads if g is not None]))
+            # grad_norm_sq = torch.zeros(1, device=model_device, dtype=torch.float32)
+            # for grad in grads:
+            #     if grad is None:
+            #         continue
+            #     grad_norm_sq += grad.float().pow(2).sum()
 
-            grad_norm_sq = torch.zeros(1, device=model_device, dtype=torch.float32)
-            for grad in grads:
-                if grad is None:
-                    continue
-                grad_norm_sq += grad.float().pow(2).sum()
-
-            approx_kl = 0.5 * eta_sq * grad_norm_sq
+            # approx_kl = 0.5 * eta_sq * grad_norm_sq
+            approx_kl = grad_norm
             rewards.append((-approx_kl).squeeze(0))
 
         return torch.stack(rewards).to(device=model_device, dtype=torch.float32)
@@ -1207,7 +1208,18 @@ class INTUITORTrainer(Trainer):
         rewards_per_func = gather(rewards_per_func)
         gathered_kl_rewards = gather(kl_rewards)
         kl_rewards_for_logging = gathered_kl_rewards.detach().cpu().tolist()
-
+        # === 新增：全局 min-max 归一化，将 KL 奖励映射到 [0, 1] ===
+        kl_min = gathered_kl_rewards.min()
+        kl_max = gathered_kl_rewards.max()
+        if (kl_max - kl_min) < 1e-12:
+            # 退化情形：全体样本几乎一样，为了保证 max=1 / min=0，手动拉开
+            kl_rewards = torch.zeros_like(kl_rewards)
+            gathered_kl_rewards = torch.zeros_like(gathered_kl_rewards)
+            kl_rewards[gathered_kl_rewards.argmax()] = 1.0
+            gathered_kl_rewards[gathered_kl_rewards.argmax()] = 1.0
+        else:
+            kl_rewards = (kl_rewards - kl_min) / (kl_max - kl_min)
+            gathered_kl_rewards = (gathered_kl_rewards - kl_min) / (kl_max - kl_min)
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 

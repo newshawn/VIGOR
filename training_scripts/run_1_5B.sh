@@ -114,7 +114,7 @@ nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     accelerate launch --config_file recipes/accelerate_configs/zero3.yaml --num_processes=$NUM_PROCESSES \
     $SCRIPT_PATH \
     --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
-    --num_generations $num_generations \
+    --num_generations $num_generations --output_dir $OUTPUT_DIR \
     --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME > "${LOG_DIR}/run_${LOG_PREFIX}.log" 2>&1 &
 TRAINING_PID=$!
 wait $TRAINING_PID
