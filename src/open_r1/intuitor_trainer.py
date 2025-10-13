@@ -503,6 +503,13 @@ class INTUITORTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
+        kl_eta = getattr(args, "kl_reward_eta", None)
+        if kl_eta is None:
+            kl_eta = getattr(args, "learning_rate", None)
+        if kl_eta is None:
+            kl_eta = 1.0
+        self.kl_reward_eta = float(kl_eta)
+        self._kl_reward_params_cache = None
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -830,63 +837,97 @@ class INTUITORTrainer(Trainer):
             logps = selective_log_softmax(logits, input_ids_batch)  # compute logprobs for the input tokens
             all_logps.append(logps)
         return torch.cat(all_logps, dim=0)
-    
+
+    def _get_kl_reward_parameters(self, model: nn.Module) -> list[torch.nn.Parameter]:
+        if getattr(self, "_kl_reward_params_cache", None) is not None:
+            return self._kl_reward_params_cache
+
+        unwrap_model = self.accelerator.unwrap_model(model)
+        lora_params: list[torch.nn.Parameter] = []
+        fallback_params: list[torch.nn.Parameter] = []
+        for name, param in unwrap_model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if "lora" in name.lower():
+                lora_params.append(param)
+            else:
+                fallback_params.append(param)
+
+        if lora_params:
+            selected_params = lora_params
+        else:
+            selected_params = fallback_params
+
+        self._kl_reward_params_cache = selected_params
+        return self._kl_reward_params_cache
+
     @profiling_decorator
-    def _get_per_token_self_certainty(
-        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None
-    ) -> torch.Tensor:
-        """
-        Computes per-token self-certainty in batches. We add constnat logV, which is equivalent to the original
-        formula as we are goting to normalize it in batch.
-        """
-        batch_size = batch_size or input_ids.size(0)
-        all_sce = []
-        # Process inputs in chunks
-        for i in range(0, input_ids.size(0), batch_size):   # input_ids.size(0)=4*8, batch_size=4
-            input_ids_batch = input_ids[i : i + batch_size]
-            attention_mask_batch = attention_mask[i : i + batch_size]
-
-            # Get logits: shape (B, seq_len, V)
-            logits = model(input_ids=input_ids_batch, attention_mask=attention_mask_batch).logits
-            # Keep only the last `logits_to_keep` positions
-            sce_chunk = logits[:, -logits_to_keep:, :]  # (B, L_keep, V) 只有completion部分的logits
-            # Compute log-sum-exp across vocabulary and subtract mean logit
-            # logsumexp - mean gives a measure of dispersion (self-certainty)
-            sce_values = torch.logsumexp(sce_chunk, dim=-1) - sce_chunk.mean(dim=-1)    # (B, L_keep) 计算每个token的self-certainty 
-            all_sce.append(sce_values)
-
-        # Concatenate over batch dimension
-        return torch.cat(all_sce, dim=0)    # (B * num_generation, L_keep)
-
-    
-    @profiling_decorator
-    @torch.no_grad()
-    def _get_advantage_from_sce(
+    def _compute_gradient_kl_reward(
         self,
-        SCe: torch.Tensor,
-        completion_mask: torch.Tensor,          
+        model: nn.Module,
+        prompt_ids: torch.Tensor,
+        prompt_mask: torch.Tensor,
+        completion_ids: torch.Tensor,
+        completion_mask: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Calculates advantage scores from SCe values and returns a 1D tensor with a single advantage per sample.
+        trainable_params = self._get_kl_reward_parameters(model)
+        if len(trainable_params) == 0:
+            return torch.zeros(
+                prompt_ids.size(0),
+                device=prompt_ids.device,
+                dtype=torch.float32,
+            )
 
-        Args
-        ----
-        SCe : (B, L) tensor
-            Per-token score.
-        completion_mask : (B, L) bool / 0-1 tensor
-            1 for valid tokens, 0 for padding.
-        Returns
-        -------
-        advantage : (B,) tensor 
-        """
-        output_lengths = completion_mask.sum(dim=1, dtype=torch.long) # (B,)   # 计算每个completion的有效长度
-        advantage = torch.zeros(SCe.size(0), device=SCe.device, dtype=SCe.dtype)    
-        valid_mask = output_lengths > 0 # 过滤掉空的completion，valid_mask = torch.tensor([True, False, True, False]) # 有效掩码
-        if valid_mask.any():
-            sce_sum = (SCe * completion_mask).sum(dim=1)
-            # 当valid_mask为True时，计算advantage，valid_mask=False的时候，不操作，直接把对应的advantage赋值为0
-            advantage[valid_mask] = sce_sum[valid_mask] / output_lengths[valid_mask].to(SCe.dtype)
-        return advantage.detach()
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        prompt_labels = torch.full_like(prompt_ids, -100)
+        completion_labels = completion_ids.clone()
+        completion_labels = completion_labels.masked_fill(completion_mask == 0, -100)
+        labels = torch.cat([prompt_labels, completion_labels], dim=1)
+
+        eta = getattr(self, "kl_reward_eta", None)
+        if eta is None:
+            eta = getattr(self.args, "learning_rate", 1.0)
+        eta_sq = float(eta) * float(eta)
+        eta_sq = torch.tensor(eta_sq, device=prompt_ids.device, dtype=torch.float32)
+
+        rewards = []
+        model_device = prompt_ids.device
+        for idx in range(input_ids.size(0)):
+            model.zero_grad(set_to_none=True)
+            single_input_ids = input_ids[idx : idx + 1]
+            single_attention_mask = attention_mask[idx : idx + 1]
+            single_labels = labels[idx : idx + 1]
+
+            if completion_mask[idx].sum() <= 0:
+                rewards.append(torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0))
+                continue
+
+            with torch.enable_grad():
+                outputs = model(
+                    input_ids=single_input_ids,
+                    attention_mask=single_attention_mask,
+                    labels=single_labels,
+                )
+                loss = outputs.loss.float()
+                grads = torch.autograd.grad(
+                    loss,
+                    trainable_params,
+                    retain_graph=False,
+                    create_graph=False,
+                    allow_unused=True,
+                )
+
+            grad_norm_sq = torch.zeros(1, device=model_device, dtype=torch.float32)
+            for grad in grads:
+                if grad is None:
+                    continue
+                grad_norm_sq += grad.float().pow(2).sum()
+
+            approx_kl = 0.5 * eta_sq * grad_norm_sq
+            rewards.append((-approx_kl).squeeze(0))
+
+        return torch.stack(rewards).to(device=model_device, dtype=torch.float32)
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -1071,6 +1112,10 @@ class INTUITORTrainer(Trainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
 
+        kl_rewards = self._compute_gradient_kl_reward(
+            self.model, prompt_ids, prompt_mask, completion_ids, completion_mask
+        ).detach()
+
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
@@ -1083,19 +1128,7 @@ class INTUITORTrainer(Trainer):
                 )
             else:   # 只迭代一次，不需要保存旧策略
                 old_per_token_logps = None
-            # 计算每个 token 的自确信度
-            # 这里的batch_size是4*8还是一个句子的8个generation? 4*8
-            # 自确信度和优势的shape呢？
-            # 自确信度是 (Batch * num_generation, logits_to_keep)，每个句子的completion部分都被扩展为logits_to_keep个token
-            # 优势是将每个completion的有效token的自确信度加起来取平均，作为该句子的自确信度，然后计算每个句子的优势值，形状为(Batch * num_generation, )
-            sce_advantage_raw = self._get_per_token_self_certainty(
-                self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-            )
-            
-            sce_advantage_raw  = self._get_advantage_from_sce(
-                sce_advantage_raw, completion_mask
-            )
-            
+
             if self.beta == 0.0:
                 ref_per_token_logps = None
             elif self.ref_model is not None:
@@ -1162,27 +1195,24 @@ class INTUITORTrainer(Trainer):
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
-        sce_advantage_mean = gather((sce_advantage_raw))
-
+        gathered_kl_rewards = gather(kl_rewards)
+        kl_rewards_for_logging = gathered_kl_rewards.detach().cpu().tolist()
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-        
+
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
 
-        # if reward_weights is not all zero, normalize them to get the advantages, otherwize set advantage to 0
+        # if reward_weights is not all zero, normalize them to get the advantages, otherwise set advantage to 0
         if torch.any(self.reward_weights != 0) and len(self.reward_funcs) > 0:
-            warnings.warn(
-                "Combining specified rewards together with self-certainty advantage. "
-            )
+            warnings.warn("Combining specified rewards together with KL-based advantage.")
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
             std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
             advantages = rewards - mean_grouped_rewards
             if self.scale_rewards:
                 advantages = advantages / (std_grouped_rewards + 1e-4)
-        
         else:
             advantages = torch.zeros_like(rewards)
 
@@ -1191,25 +1221,23 @@ class INTUITORTrainer(Trainer):
             self.accelerator.process_index * len(prompts),
             (self.accelerator.process_index + 1) * len(prompts),
         )
-        
         advantages = advantages[process_slice]
-        
-        sce_advantage_mean = sce_advantage_mean.view(-1, self.num_generations)
-        mean_sce_advantage_mean = sce_advantage_mean.mean(dim=1)
-        std_sce_advantage_mean = sce_advantage_mean.std(dim=1)
-        
-        sce_advantage_record = mean_sce_advantage_mean.mean().item()
-        sce_advantage_std_record = std_sce_advantage_mean.mean().item()
-        
-        mean_sce_advantage_mean = mean_sce_advantage_mean.repeat_interleave(self.num_generations, dim=0)
-        std_sce_advantage_mean = std_sce_advantage_mean.repeat_interleave(self.num_generations, dim=0)
-        
-        mean_sce_advantage_mean = mean_sce_advantage_mean[process_slice]
-        std_sce_advantage_mean = std_sce_advantage_mean[process_slice]
-        sce_advantage = (sce_advantage_raw - mean_sce_advantage_mean)
-        sce_advantage = sce_advantage / (std_sce_advantage_mean + 1e-4)
-        # 这里的 advantages 是上面的 reward_func 计算的，但是由于作者只用自确信度，因此advantages = 0
-        sce_advantage = sce_advantage + advantages
+
+        gathered_kl_rewards = gathered_kl_rewards.view(-1, self.num_generations)
+        mean_kl_rewards = gathered_kl_rewards.mean(dim=1)
+        std_kl_rewards = gathered_kl_rewards.std(dim=1)
+
+        kl_reward_record = mean_kl_rewards.mean().item()
+        kl_reward_std_record = std_kl_rewards.mean().item()
+
+        mean_kl_rewards = mean_kl_rewards.repeat_interleave(self.num_generations, dim=0)
+        std_kl_rewards = std_kl_rewards.repeat_interleave(self.num_generations, dim=0)
+
+        mean_kl_rewards = mean_kl_rewards[process_slice]
+        std_kl_rewards = std_kl_rewards[process_slice]
+
+        kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)
+        total_advantage = kl_advantage + advantages
         
         # Log the metrics
         if mode == "train":
@@ -1242,21 +1270,22 @@ class INTUITORTrainer(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
-        self._metrics[mode]["sce_advantage"].append(sce_advantage_record)
-        self._metrics[mode]["sce_advantage_std"].append(sce_advantage_std_record)
+        self._metrics[mode]["rewards/kl_reward/mean"].append(kl_reward_record)
+        self._metrics[mode]["rewards/kl_reward/std"].append(kl_reward_std_record)
         
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
+        self._textual_logs["rewards"]["kl_reward"].extend(kl_rewards_for_logging)
 
         return {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
-            "advantages": sce_advantage,
+            "advantages": total_advantage,
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
         }

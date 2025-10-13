@@ -39,6 +39,12 @@ class GRPOConfig(trl.GRPOConfig):
         default=None,
         metadata={"help": "The optional system prompt to use."},
     )
+    kl_reward_eta: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Step size eta used for the KL-based reward approximation. Defaults to learning_rate when unset."
+        },
+    )
     hub_model_revision: Optional[str] = field(
         default="main", metadata={"help": "The Hub model branch to push the model to."}
     )
