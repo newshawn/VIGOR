@@ -914,12 +914,15 @@ class INTUITORTrainer(Trainer):
                 continue
 
             with torch.enable_grad():
-                outputs = model(
-                    input_ids=single_input_ids,
-                    attention_mask=single_attention_mask,
-                    labels=single_labels,
-                )
-                loss = outputs.loss.float()
+                # Use bf16 autocast to reduce activation memory during KL gradient computation
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    outputs = model(
+                        input_ids=single_input_ids,
+                        attention_mask=single_attention_mask,
+                        labels=single_labels,
+                    )
+                    loss = outputs.loss
+                loss = loss.float()
                 grads = torch.autograd.grad(
                     loss,
                     trainable_params,
@@ -1126,7 +1129,7 @@ class INTUITORTrainer(Trainer):
         kl_rewards = self._compute_gradient_kl_reward(
             self.model, prompt_ids, prompt_mask, completion_ids, completion_mask
         ).detach()
-
+        # import pdb; pdb.set_trace()
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
@@ -1220,6 +1223,8 @@ class INTUITORTrainer(Trainer):
         else:
             kl_rewards = (kl_rewards - kl_min) / (kl_max - kl_min)
             gathered_kl_rewards = (gathered_kl_rewards - kl_min) / (kl_max - kl_min)
+        # 保存归一化后的 KL 奖励用于文本日志
+        kl_rewards_norm_for_logging = gathered_kl_rewards.detach().cpu().tolist()
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
@@ -1301,29 +1306,30 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
         self._metrics[mode]["rewards/kl_reward/mean"].append(kl_reward_record)
         self._metrics[mode]["rewards/kl_reward/std"].append(kl_reward_std_record)
-        
+        # 监测 kl 的 advantage的平均值，为0才正常
+        self._metrics[mode]["advantages/kl_mean"].append(self.accelerator.gather_for_metrics(kl_advantage).nanmean().item())
+        self._metrics[mode]["advantages/total_mean"].append(self.accelerator.gather_for_metrics(total_advantage).nanmean().item())
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._textual_logs["rewards"]["kl_reward"].extend(kl_rewards_for_logging)
+        # 追加记录归一化后的 KL 奖励（范围约为 [0,1]）
+        self._textual_logs["rewards"]["kl_reward_norm"].extend(kl_rewards_norm_for_logging)
 
-        # Also log aggregated reward and per-completion advantages for grouped printing
-        # rewards: already aggregated across processes (after gather)
-        self._textual_logs["aggregated_reward"].extend(rewards.detach().cpu().tolist())
-        # Advantages over rewards (before adding KL)
-        self._textual_logs["advantages"]["reward"].extend(reward_advantages_all.detach().cpu().tolist())
-        # KL-based advantages computed across all completions
-        # KL-based advantages computed across all completions
-        # gathered_kl_rewards is shaped (prompt_groups, num_generations);
-        # mean_kl_rewards_all/std_kl_rewards_all are 1-D of length (prompt_groups * num_generations).
-        # Align shapes by flattening gathered_kl_rewards for per-completion logging.
-        # gathered_kl_rewards_flat = gathered_kl_rewards.reshape(-1)
-        # 若仅需要记录本进程的 KL 与总优势，可直接使用局部切片（避免全量收集与展平）
-        # 注：保持 gathered 统计以支持其他日志（如按组均值），但文本优势列表仅追加本地值
-        self._textual_logs["advantages"]["kl"].extend(kl_advantage.detach().cpu().tolist())
-        self._textual_logs["advantages"]["total"].extend(total_advantage.detach().cpu().tolist())
+        # 记录 KL/Total 的优势项到 textual_logs（全局对齐，支持多卡）：
+        # 使用 gather 后的全局 KL 奖励与对应均值/方差，得到每个 completion 的 KL 优势
+        gathered_kl_rewards_flat = gathered_kl_rewards.reshape(-1)
+        kl_advantages_all = (gathered_kl_rewards_flat - mean_kl_rewards_all) / (std_kl_rewards_all + 1e-4)
+        # total 优势 = KL 优势 +（任务奖励优势，已在切片前缓存为 reward_advantages_all）
+        total_advantages_all = reward_advantages_all + kl_advantages_all
+        # 放入 advantages 命名空间，便于控制台分组打印与 wandb 独立列
+        # self._textual_logs["advantages"]["kl"].extend(kl_advantages_all.detach().cpu().tolist())
+        # self._textual_logs["advantages"]["total"].extend(total_advantages_all.detach().cpu().tolist())
+        # # 同时放入 rewards 命名空间，便于与其它 reward 列并列查看（wandb 会通过 **rewards 展开为列）
+        self._textual_logs["rewards"]["kl_advantage"].extend(kl_advantages_all.detach().cpu().tolist())
+        self._textual_logs["rewards"]["total_advantage"].extend(total_advantages_all.detach().cpu().tolist())
 
         return {
             "prompt_ids": prompt_ids,
@@ -1376,6 +1382,7 @@ class INTUITORTrainer(Trainer):
         per_token_loss1 = coef_1 * advantages
         per_token_loss2 = coef_2 * advantages
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)   # 使用最小值，advantages > 0时，避免过于激进；<0时限制惩罚
+        # import pdb; pdb.set_trace()
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
         # import pdb; pdb.set_trace()
@@ -1384,6 +1391,7 @@ class INTUITORTrainer(Trainer):
 
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            import pdb; pdb.set_trace()
         elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
         else:
@@ -1462,66 +1470,6 @@ class INTUITORTrainer(Trainer):
                 if self.wandb_log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
                 wandb.log({"completions": wandb.Table(dataframe=df)})
-
-            # Grouped rewards & advantages logging (per prompt)
-            try:
-                prompts = list(self._textual_logs["prompt"])  # length == number of completions
-                if len(prompts) > 0:
-                    start_idx = getattr(self, "_last_grouped_log_index", 0)
-                    end_idx = len(prompts)
-                    # number of new completions since last log
-                    new_n = end_idx - start_idx
-                    if new_n > 0:
-                        # align to full prompt groups
-                        rem = new_n % self.num_generations
-                        if rem != 0:
-                            end_idx -= rem
-                            new_n -= rem
-                        if new_n > 0:
-                            # materialize lists for slicing
-                            agg_reward = list(self._textual_logs.get("aggregated_reward", []))
-                            kl_reward = list(self._textual_logs["rewards"].get("kl_reward", []))
-                            adv_reward = list(self._textual_logs["advantages"].get("reward", []))
-                            adv_kl = list(self._textual_logs["advantages"].get("kl", []))
-                            adv_total = list(self._textual_logs["advantages"].get("total", []))
-
-                            # Safety: ensure enough data to slice
-                            arrays_ok = all(len(x) >= end_idx for x in [agg_reward, kl_reward, adv_reward, adv_kl, adv_total])
-                            if arrays_ok:
-                                print(f"[step {self.state.global_step}] Grouped rewards/advantages for last {new_n // self.num_generations} prompts")
-                                gid = 0
-                                for i in range(start_idx, end_idx, self.num_generations):
-                                    gid += 1
-                                    prompt_txt = prompts[i]
-                                    # sanitize and trim prompt for single-line readability
-                                    prompt_snip = str(prompt_txt).replace("\n", " ")
-                                    if len(prompt_snip) > 160:
-                                        prompt_snip = prompt_snip[:160] + "…"
-                                    print(f"- Prompt {gid} ({self.num_generations} completions): {prompt_snip}")
-                                    for j in range(self.num_generations):
-                                        idx = i + j
-                                        r = agg_reward[idx]
-                                        r_adv = adv_reward[idx]
-                                        k = kl_reward[idx]
-                                        k_adv = adv_kl[idx]
-                                        t_adv = adv_total[idx]
-                                        def _fmt(x):
-                                            try:
-                                                if x is None:
-                                                    return "nan"
-                                                xv = float(x)
-                                                # handle nan
-                                                return f"{xv:.4f}" if xv == xv else "nan"
-                                            except Exception:
-                                                return "nan"
-                                        print(
-                                            f"  · c{j+1:02d} | reward={_fmt(r)} | R-adv={_fmt(r_adv)} | KL={_fmt(k)} | KL-adv={_fmt(k_adv)} | Total-adv={_fmt(t_adv)}"
-                                        )
-                                # advance cursor
-                                self._last_grouped_log_index = end_idx
-            except Exception as _:
-                # never crash training due to logging
-                pass
 
     def create_model_card(
         self,
