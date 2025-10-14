@@ -1140,9 +1140,9 @@ class INTUITORTrainer(Trainer):
             else:   # 只迭代一次，不需要保存旧策略
                 old_per_token_logps = None
 
-            if self.beta == 0.0:
+            if self.beta == 0.0:    # 0.005
                 ref_per_token_logps = None
-            elif self.ref_model is not None:
+            elif self.ref_model is not None:    # not None
                 ref_per_token_logps = self._get_per_token_logps(
                     self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
@@ -1206,7 +1206,7 @@ class INTUITORTrainer(Trainer):
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
-        gathered_kl_rewards = gather(kl_rewards)
+        gathered_kl_rewards = gather(kl_rewards)    # 将所有gpu的kl_reward聚集到一起
         kl_rewards_for_logging = gathered_kl_rewards.detach().cpu().tolist()
         # === 新增：全局 min-max 归一化，将 KL 奖励映射到 [0, 1] ===
         kl_min = gathered_kl_rewards.min()
@@ -1267,7 +1267,7 @@ class INTUITORTrainer(Trainer):
         # 逐个元素相减，计算 KL 奖励的优势
         kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)
         total_advantage = kl_advantage + advantages
-        
+        # import pdb; pdb.set_trace()
         # Log the metrics
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
@@ -1367,15 +1367,16 @@ class INTUITORTrainer(Trainer):
         # 重要性采样比率，per_token_logps已经取过对数了，因此前面要用torch.exp()， coef_1 = π_θ(a|s) / π_θ_old(a|s) = exp(log π_θ(a|s) - log π_θ_old(a|s))
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        # 一个completion的所有token共用优势，但是系数不同，有高有低，取决于重要性采样和clip
+        # 一个completion的所有token共用优势，但是系数不同，有高有低，取决于重要性采样和clip，现在coef_1=coef_2=2，因为每次更新只使用一次重要性采样
         per_token_loss1 = coef_1 * advantages
         per_token_loss2 = coef_2 * advantages
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)   # 使用最小值，advantages > 0时，避免过于激进；<0时限制惩罚
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
-
+        # import pdb; pdb.set_trace()
         if self.loss_type == "grpo":
             loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
         elif self.loss_type == "dr_grpo":

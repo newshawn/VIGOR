@@ -14,22 +14,27 @@ export WANDB_MODE=offline
 export ACCELERATE_LOG_LEVEL=info
 # 设置中国时区
 # export TZ='Asia/Shanghai'
-num_generations=3 # 作者使用7，但是3卡时候用7会犯错
-NUM_PROCESSES=3
+num_generations=8 # 作者使用7，但是3卡时候用7会犯错
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
+START_VLLM=false # true: 1卡 vLLM + 3卡训练；false: 4卡训练
 
-# 根据GPU数量设置CUDA设备和batch参数
-# 目前仅使用4090，7卡或者3卡
-if [ "$NUM_PROCESSES" -eq 7 ]; then
-    CUDA_DEVICES="1,2,3,4,5,6,7"
-    BATCH_SIZE=4
-    GRAD_ACCUM=32
-    lr=3.0e-06
-else
+# GPU 分配策略
+# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
+# - START_VLLM=false: 训练用 0,1,2,3 共 4 卡
+if [ "$START_VLLM" = true ]; then
+    VLLM_DEVICE="0"
     CUDA_DEVICES="1,2,3"
+    NUM_PROCESSES=3
     BATCH_SIZE=1
     GRAD_ACCUM=1
+    lr=3.0e-06
+else
+    VLLM_DEVICE=""
+    CUDA_DEVICES="0,1,2,3"
+    NUM_PROCESSES=4
+    BATCH_SIZE=4
+    GRAD_ACCUM=32
     lr=3.0e-06
 fi
 
@@ -75,7 +80,8 @@ echo "RUN_NAME: $RUN_NAME"
 echo "LOG_PREFIX: $LOG_PREFIX"
 echo "LOG_DIR: $LOG_DIR"
 echo "num_generations: $num_generations"
-echo "OUTPUT_DIR: $OUTPUT_DIR" >> "$PARAM_LOG"
+echo "OUTPUT_DIR: $OUTPUT_DIR"
+echo "START_VLLM: $START_VLLM"
 echo "========================"
 
 # 启动GPU监控（每5秒记录一次）
@@ -99,15 +105,26 @@ echo "LOG_PREFIX: $LOG_PREFIX" >> "$PARAM_LOG"
 echo "LOG_DIR: $LOG_DIR" >> "$PARAM_LOG"
 echo "num_generations: $num_generations" >> "$PARAM_LOG"
 echo "OUTPUT_DIR: $OUTPUT_DIR" >> "$PARAM_LOG"
+echo "START_VLLM: $START_VLLM" >> "$PARAM_LOG"
 
 
-# 启动 vllm
-nohup env CUDA_VISIBLE_DEVICES=0 \
-    trl vllm-serve \
-    --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B \
-    > "${LOG_DIR}/vllm-server.log" 2>&1 &
-VLLM_PID=$!
-echo "vLLM server started with PID: $VLLM_PID"
+# 启动 vLLM（可选）
+if [ "$START_VLLM" = true ]; then
+  nohup env CUDA_VISIBLE_DEVICES=$VLLM_DEVICE \
+      trl vllm-serve \
+      --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B \
+      > "${LOG_DIR}/vllm-server.log" 2>&1 &
+  VLLM_PID=$!
+  echo "vLLM server started with PID: $VLLM_PID on GPU $VLLM_DEVICE"
+else
+  echo "vLLM server skipped (START_VLLM=false)"
+fi
+
+# 如果不启动 vLLM，则通过 CLI 覆盖 YAML，关闭 use_vllm
+EXTRA_ARGS=""
+if [ "$START_VLLM" != true ]; then
+  EXTRA_ARGS="--use_vllm false"
+fi
 
 # 启动训练脚本，默认的是24g版本，num_processes=7；为3的时候就使用48g显存
 nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
@@ -115,7 +132,7 @@ nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     $SCRIPT_PATH \
     --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
-    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME > "${LOG_DIR}/run_${LOG_PREFIX}.log" 2>&1 &
+    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME $EXTRA_ARGS > "${LOG_DIR}/run_${LOG_PREFIX}.log" 2>&1 &
 TRAINING_PID=$!
 wait $TRAINING_PID
 echo "Training process started with PID: $TRAINING_PID"
