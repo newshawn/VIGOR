@@ -1391,7 +1391,7 @@ class INTUITORTrainer(Trainer):
 
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
         elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
         else:

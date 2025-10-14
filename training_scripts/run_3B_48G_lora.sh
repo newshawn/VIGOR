@@ -14,10 +14,10 @@ export WANDB_MODE=offline
 export ACCELERATE_LOG_LEVEL=info
 # 设置中国时区
 # export TZ='Asia/Shanghai'
-num_generations=6 # 作者使用7，但是3卡时候用7会犯错
+num_generations=4 # 作者使用7，但是3卡时候用7会犯错
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
-START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
+START_VLLM=false # true: 1卡 vLLM + 3卡训练；false: 4卡训练
 
 # GPU 分配策略
 # - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
