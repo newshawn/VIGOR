@@ -1315,10 +1315,15 @@ class INTUITORTrainer(Trainer):
         # Advantages over rewards (before adding KL)
         self._textual_logs["advantages"]["reward"].extend(reward_advantages_all.detach().cpu().tolist())
         # KL-based advantages computed across all completions
-        kl_advantages_all = (gathered_kl_rewards - mean_kl_rewards_all) / (std_kl_rewards_all + 1e-4)
-        self._textual_logs["advantages"]["kl"].extend(kl_advantages_all.detach().cpu().tolist())
-        total_advantages_all = reward_advantages_all + kl_advantages_all
-        self._textual_logs["advantages"]["total"].extend(total_advantages_all.detach().cpu().tolist())
+        # KL-based advantages computed across all completions
+        # gathered_kl_rewards is shaped (prompt_groups, num_generations);
+        # mean_kl_rewards_all/std_kl_rewards_all are 1-D of length (prompt_groups * num_generations).
+        # Align shapes by flattening gathered_kl_rewards for per-completion logging.
+        # gathered_kl_rewards_flat = gathered_kl_rewards.reshape(-1)
+        # 若仅需要记录本进程的 KL 与总优势，可直接使用局部切片（避免全量收集与展平）
+        # 注：保持 gathered 统计以支持其他日志（如按组均值），但文本优势列表仅追加本地值
+        self._textual_logs["advantages"]["kl"].extend(kl_advantage.detach().cpu().tolist())
+        self._textual_logs["advantages"]["total"].extend(total_advantage.detach().cpu().tolist())
 
         return {
             "prompt_ids": prompt_ids,
