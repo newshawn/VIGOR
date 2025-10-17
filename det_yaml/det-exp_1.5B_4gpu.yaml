@@ -6,7 +6,7 @@ project: Intuitor
 max_restarts: 0
 # 只需要修改pool和gpu数量
 resources:
-  resource_pool: amp-48g
+  resource_pool: ada-24g
   slots_per_trial: 4
   is_single_node: true
   shm_size: 34359738368

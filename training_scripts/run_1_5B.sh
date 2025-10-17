@@ -12,15 +12,15 @@ export CUDA_HOME=/usr/local/cuda-12.4
 export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_MODE=offline
 export ACCELERATE_LOG_LEVEL=info
-export CUDA_VISIBLE_DEVICES=3
+# export CUDA_VISIBLE_DEVICES=3
 # 设置中国时区
 # export TZ='Asia/Shanghai'
 ## 手动切换模式（只需改这里）
-MODE=debug        # train | debug
+MODE=train        # train | debug
 START_VLLM=true   # 是否启动 vLLM（debug 下会强制关闭）
 
-num_generations=3   # 作者使用7，但是3卡时候用7会犯错
-NUM_PROCESSES=3     # 训练时的并行进程数（train 模式使用）
+num_generations=2   # 作者使用7，但是3卡时候用7会犯错
+NUM_PROCESSES=4     # 训练时的并行进程数（train 模式使用）
 EXP_TYPE=intuitor    # 可选值: intuitor 或 grpo
 MAX_STEPS=-1        # 可选 -1 或者具体步数
 
@@ -40,17 +40,35 @@ if [ "$MODE" = "debug" ]; then
         MAX_STEPS=50
     fi
 else
-    # 目前仅使用4090，7卡或者3卡
-    if [ "$NUM_PROCESSES" -eq 7 ]; then
-        CUDA_DEVICES="1,2,3,4,5,6,7"
+    # 目前仅使用4090，仅支持 8卡 或 4卡 训练
+    REQUESTED_PROCESSES=$NUM_PROCESSES
+    if [ "$NUM_PROCESSES" -eq 8 ]; then
+        if [ "$START_VLLM" = true ]; then
+            CUDA_DEVICES="1,2,3,4,5,6,7"
+            NUM_PROCESSES=7  # 预留 GPU0 给 vLLM
+        else
+            CUDA_DEVICES="0,1,2,3,4,5,6,7"
+        fi
         BATCH_SIZE=4
         GRAD_ACCUM=32
         lr=3.0e-06
-    else
-        CUDA_DEVICES="1,2,3"
-        BATCH_SIZE=1
+    elif [ "$NUM_PROCESSES" -eq 4 ]; then
+        if [ "$START_VLLM" = true ]; then
+            CUDA_DEVICES="1,2,3"
+            NUM_PROCESSES=3  # 预留 GPU0 给 vLLM
+        else
+            CUDA_DEVICES="0,1,2,3"
+        fi
+        BATCH_SIZE=2
         GRAD_ACCUM=1
         lr=3.0e-06
+    else
+        echo "[ERROR] 当前脚本仅支持 NUM_PROCESSES=4 或 8，实际为 ${NUM_PROCESSES}." >&2
+        exit 1
+    fi
+
+    if [ "$START_VLLM" = true ] && [ "$REQUESTED_PROCESSES" -ne "$NUM_PROCESSES" ]; then
+        echo "[INFO] vLLM 占用 1 张卡，训练进程数从 ${REQUESTED_PROCESSES} 调整为 ${NUM_PROCESSES}"
     fi
 fi
 
