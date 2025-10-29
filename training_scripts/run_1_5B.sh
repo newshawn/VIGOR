@@ -12,27 +12,28 @@ export CUDA_HOME=/usr/local/cuda-12.4
 export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_MODE=offline
 export ACCELERATE_LOG_LEVEL=info
+export CUDA_VISIBLE_DEVICES=1
 # export CUDA_VISIBLE_DEVICES=3
 # 设置中国时区
 # export TZ='Asia/Shanghai'
 ## 手动切换模式（只需改这里）
-MODE=train        # train | debug
+MODE=debug        # train | debug
 START_VLLM=true   # 是否启动 vLLM（debug 下会强制关闭）
 
-num_generations=2   # 作者使用7，但是3卡时候用7会犯错
-NUM_PROCESSES=4     # 训练时的并行进程数（train 模式使用）
+num_generations=7   # 作者使用7，但是3卡时候用7会犯错
+NUM_PROCESSES=8     # 训练时的并行进程数（train 模式使用）
 EXP_TYPE=intuitor    # 可选值: intuitor 或 grpo
 MAX_STEPS=-1        # 可选 -1 或者具体步数
 
 # 根据模式/进程数设置 CUDA 设备与 batch 参数
 if [ "$MODE" = "debug" ]; then
-    # 单卡调试：用 GPU 0，小 batch，小步数，并强制关闭 vLLM
-    CUDA_DEVICES="0"
+    # 单卡调试：沿用 CUDA_VISIBLE_DEVICES（默认0），小 batch，小步数，并强制关闭 vLLM
+    CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
     NUM_PROCESSES=1
-    BATCH_SIZE=2
+    BATCH_SIZE=3
     GRAD_ACCUM=1
     lr=3.0e-06
-    num_generations=2
+    num_generations=3
     START_VLLM=false
     # 彻底关闭 wandb（即使 YAML 里有 report_to: wandb）
     export WANDB_DISABLED=true
@@ -45,11 +46,13 @@ else
     if [ "$NUM_PROCESSES" -eq 8 ]; then
         if [ "$START_VLLM" = true ]; then
             CUDA_DEVICES="1,2,3,4,5,6,7"
+            num_generations=7
             NUM_PROCESSES=7  # 预留 GPU0 给 vLLM
         else
             CUDA_DEVICES="0,1,2,3,4,5,6,7"
+            num_generations=8
         fi
-        BATCH_SIZE=4
+        BATCH_SIZE=3
         GRAD_ACCUM=32
         lr=3.0e-06
     elif [ "$NUM_PROCESSES" -eq 4 ]; then
@@ -81,7 +84,7 @@ if [ "$EXP_TYPE" = "grpo" ]; then
     LOG_PREFIX="grpo"
 else
     SCRIPT_PATH="src/open_r1/intuitor.py"
-    CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo_lora.yaml"
+    CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo.yaml"
     WANDB_PROJECT="open-r1-intuitor"
     RUN_NAME="Qwen2.5-Intuitor-1.5B"
     LOG_PREFIX="intuitor"
@@ -165,7 +168,7 @@ fi
 
 # 仅在 debug 模式下，缩短生成长度（覆盖 YAML 的 max_completion_length: 2048）
 if [ "$MODE" = "debug" ]; then
-  EXTRA_ARGS="$EXTRA_ARGS --max_completion_length 1024"
+  EXTRA_ARGS="$EXTRA_ARGS --max_completion_length 256"
 fi
 
 # debug 关闭所有报告集成，覆盖 YAML 的 report_to: [wandb]

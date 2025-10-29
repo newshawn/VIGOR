@@ -45,6 +45,43 @@ class GRPOConfig(trl.GRPOConfig):
             "help": "Step size eta used for the KL-based reward approximation. Defaults to learning_rate when unset."
         },
     )
+    semantic_reward_weight: float = field(
+        default=0.0,
+        metadata={"help": "Weight applied to the semantic regularizer. Set to 0.0 to disable."},
+    )
+    semantic_similarity_low: float = field(
+        default=0.20,
+        metadata={"help": "Lower bound for mean pairwise similarity. Prompts below this will be filtered."},
+    )
+    semantic_similarity_high: float = field(
+        default=0.85,
+        metadata={"help": "Upper bound for mean pairwise similarity. Prompts above this will be filtered."},
+    )
+    semantic_embedding_api_base: Optional[str] = field(
+        default="https://api.siliconflow.cn/v1",
+        metadata={
+            "help": "Base URL of the external embedding service. Defaults to SiliconFlow when unset."
+        },
+    )
+    semantic_embedding_api_key: Optional[str] = field(
+        default="sk-pkkoqekaidbszexjuwchtvgybvllcftpdxbfdydwzezyklxi",
+        metadata={
+            "help": "API key used for the embedding service. Falls back to environment variable "
+            "'SEMANTIC_EMBEDDING_API_KEY'."
+        },
+    )
+    semantic_embedding_model: str = field(
+        default="Qwen/Qwen3-Embedding-4B",
+        metadata={"help": "Embedding model identifier requested from the external service."},
+    )
+    semantic_embedding_timeout: float = field(
+        default=30.0,
+        metadata={"help": "Timeout (seconds) for each embedding API call."},
+    )
+    semantic_embedding_batch_size: int = field(
+        default=16,
+        metadata={"help": "Maximum number of texts sent per embedding API request."},
+    )
     hub_model_revision: Optional[str] = field(
         default="main", metadata={"help": "The Hub model branch to push the model to."}
     )

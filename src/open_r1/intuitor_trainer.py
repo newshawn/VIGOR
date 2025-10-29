@@ -23,7 +23,9 @@ from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
 
 import datasets
+import requests
 import torch
+import torch.nn.functional as F
 import torch.utils.data
 import transformers
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
@@ -503,6 +505,22 @@ class INTUITORTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.semantic_reward_weight = float(getattr(args, "semantic_reward_weight", 0.0))
+        self.semantic_similarity_low = float(getattr(args, "semantic_similarity_low", 0.2))
+        self.semantic_similarity_high = float(getattr(args, "semantic_similarity_high", 0.9))
+        self.semantic_embedding_api_base = getattr(args, "semantic_embedding_api_base", None)
+        self.semantic_embedding_api_key = getattr(args, "semantic_embedding_api_key", None)
+        self.semantic_embedding_model = getattr(args, "semantic_embedding_model", "Qwen/Qwen3-Embedding-4B")
+        self.semantic_embedding_timeout = float(getattr(args, "semantic_embedding_timeout", 30.0))
+        self.semantic_embedding_batch_size = max(1, int(getattr(args, "semantic_embedding_batch_size", 16)))
+        if self.semantic_similarity_low > self.semantic_similarity_high:
+            self.semantic_similarity_low, self.semantic_similarity_high = (
+                self.semantic_similarity_high,
+                self.semantic_similarity_low,
+            )
+        self.semantic_similarity_filter_enabled = (
+            self.semantic_similarity_low > 0.0 or self.semantic_similarity_high < 1.0
+        )
         kl_eta = getattr(args, "kl_reward_eta", None)
         if kl_eta is None:
             kl_eta = getattr(args, "learning_rate", None)
@@ -822,6 +840,98 @@ class INTUITORTrainer(Trainer):
         if logits_to_keep is not None:
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
+
+    def _compute_completion_embeddings_remote(
+        self,
+        completions_text: list[str],
+        completion_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        api_key = self.semantic_embedding_api_key or os.environ.get("SEMANTIC_EMBEDDING_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "Semantic embedding API key is required. Provide `semantic_embedding_api_key` in the config "
+                "or set the `SEMANTIC_EMBEDDING_API_KEY` environment variable."
+            )
+
+        base_url = (self.semantic_embedding_api_base or "https://api.siliconflow.cn/v1").rstrip("/")
+        endpoint = f"{base_url}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        valid_mask = (completion_mask.sum(dim=1) > 0).cpu()
+        device = completion_mask.device
+
+        embeddings_list: list[torch.Tensor] = []
+        indices: list[int] = []
+
+        batch_size = max(1, self.semantic_embedding_batch_size)
+        buffer_inputs: list[str] = []
+        buffer_indices: list[int] = []
+
+        def flush_buffer() -> None:
+            if not buffer_inputs:
+                return
+            vectors = self._request_remote_embeddings(endpoint, headers, buffer_inputs)
+            for idx, vec in zip(buffer_indices, vectors):
+                embeddings_list.append(torch.tensor(vec, dtype=torch.float32))
+                indices.append(idx)
+            buffer_inputs.clear()
+            buffer_indices.clear()
+
+        for idx, text in enumerate(completions_text):
+            if not valid_mask[idx]:
+                continue
+            clean_text = text if text.strip() else " "
+            buffer_inputs.append(clean_text)
+            buffer_indices.append(idx)
+            if len(buffer_inputs) >= batch_size:
+                flush_buffer()
+        flush_buffer()
+
+        if embeddings_list:
+            embed_dim = embeddings_list[0].size(0)
+        else:
+            embed_dim = 1
+
+        embeddings = torch.zeros(len(completions_text), embed_dim, dtype=torch.float32)
+        for idx, vec in zip(indices, embeddings_list):
+            embeddings[idx, : vec.size(0)] = vec
+
+        return embeddings.to(device), valid_mask.to(device)
+
+    def _request_remote_embeddings(
+        self,
+        endpoint: str,
+        headers: dict[str, str],
+        inputs: list[str],
+    ) -> list[list[float]]:
+        payload = {
+            "model": self.semantic_embedding_model,
+            "input": inputs,
+        }
+        try:
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=self.semantic_embedding_timeout,
+            )
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Embedding request failed: {exc}") from exc
+
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Embedding request failed with status {response.status_code}: {response.text}"
+            )
+
+        data = response.json()
+        if "data" not in data:
+            raise RuntimeError("Embedding response missing 'data' field.")
+
+        entries = sorted(data["data"], key=lambda item: item.get("index", 0))
+        return [entry["embedding"] for entry in entries]
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
@@ -1164,7 +1274,57 @@ class INTUITORTrainer(Trainer):
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
-        
+
+        semantic_filter_mask: Optional[torch.Tensor] = None
+        semantic_filter_stats: Optional[dict[str, torch.Tensor]] = None
+        # 计算当前组内的相似度，判断是否需要过滤
+        if self.semantic_similarity_filter_enabled and len(prompts) % self.num_generations == 0:
+            embeddings = None
+            valid_mask = None
+            try:
+                embeddings, valid_mask = self._compute_completion_embeddings_remote(completions_text, completion_mask)
+            except Exception as exc:
+                warnings.warn(
+                    f"Semantic embedding computation failed with error '{exc}'. "
+                    "Semantic similarity filter will be skipped for this batch."
+                )
+            if embeddings is not None and valid_mask is not None:
+                group_count = len(prompts) // self.num_generations
+                embedding_dim = embeddings.size(-1)
+                group_embeddings = embeddings.view(group_count, self.num_generations, embedding_dim).to(device)
+                group_valid_mask = valid_mask.view(group_count, self.num_generations).to(device)
+                group_mean_similarity = torch.full(
+                    (group_count,), float("nan"), device=device, dtype=torch.float32
+                )
+
+                for group_idx in range(group_count):
+                    valid_entries = group_valid_mask[group_idx]
+                    valid_count = int(valid_entries.sum().item())
+                    if valid_count < 2:
+                        continue
+                    valid_embeds = group_embeddings[group_idx][valid_entries].contiguous()
+                    valid_embeds = F.normalize(valid_embeds, p=2, dim=-1)
+                    similarity_matrix = valid_embeds @ valid_embeds.T
+                    triu_idx = torch.triu_indices(valid_count, valid_count, offset=1, device=device)
+                    mean_similarity = similarity_matrix[triu_idx[0], triu_idx[1]].mean()
+                    group_mean_similarity[group_idx] = mean_similarity
+
+                group_filter = torch.ones(group_count, dtype=torch.bool, device=device)
+                valid_similarity = ~torch.isnan(group_mean_similarity)
+                if self.semantic_similarity_low > 0.0:
+                    group_filter[valid_similarity] &= (
+                        group_mean_similarity[valid_similarity] >= self.semantic_similarity_low
+                    )
+                if self.semantic_similarity_high < 1.0:
+                    group_filter[valid_similarity] &= (
+                        group_mean_similarity[valid_similarity] <= self.semantic_similarity_high
+                    )
+
+                semantic_filter_mask = group_filter.repeat_interleave(self.num_generations)
+                semantic_filter_stats = {
+                    "group_mean_similarity": group_mean_similarity, # 平均的相似度
+                    "group_filter": group_filter,
+                }
         rewards_per_func = torch.zeros(len(prompts), max(len(self.reward_funcs),1), device=device)
         # intuitor里面的reward_func=accuracy 但是 weights=0
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
@@ -1194,6 +1354,22 @@ class INTUITORTrainer(Trainer):
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
 
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+        if semantic_filter_mask is not None:
+            mask = semantic_filter_mask.to(device=device)
+            rewards_per_func = torch.where(mask.unsqueeze(1), rewards_per_func, torch.zeros_like(rewards_per_func))
+            kl_rewards = torch.where(mask, kl_rewards, torch.zeros_like(kl_rewards))
+        filtered_group_ratio = None
+        mean_similarity_stats = None
+        if semantic_filter_stats is not None:
+            group_filter = semantic_filter_stats["group_filter"]
+            total_groups = group_filter.numel()
+            filtered_groups = (~group_filter).sum().float()
+            filtered_group_ratio = (filtered_groups, torch.tensor(float(total_groups), device=device))
+            valid_means = semantic_filter_stats["group_mean_similarity"][~torch.isnan(
+                semantic_filter_stats["group_mean_similarity"]
+            )]
+            if valid_means.numel() > 0:
+                mean_similarity_stats = valid_means
 
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
@@ -1295,6 +1471,20 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_mask.float().mean().item())
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_mask.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_mask.float().max().item())
+
+        if filtered_group_ratio is not None:
+            local_filtered, local_total = filtered_group_ratio
+            gathered_filtered = self.accelerator.gather_for_metrics(local_filtered)
+            gathered_total = self.accelerator.gather_for_metrics(local_total)
+            total_groups = gathered_total.sum().item()
+            filtered_groups = gathered_filtered.sum().item()
+            ratio = filtered_groups / total_groups if total_groups > 0 else 0.0
+            self._metrics[mode]["semantic/filtered_ratio"].append(ratio)
+        if mean_similarity_stats is not None and mean_similarity_stats.numel() > 0:
+            gathered_similarity = self.accelerator.gather_for_metrics(mean_similarity_stats)
+            self._metrics[mode]["semantic/mean_similarity"].append(gathered_similarity.nanmean().item())
+            self._metrics[mode]["semantic/min_similarity"].append(nanmin(gathered_similarity).item())
+            self._metrics[mode]["semantic/max_similarity"].append(nanmax(gathered_similarity).item())
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
