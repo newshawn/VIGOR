@@ -12,6 +12,7 @@ export CUDA_HOME=/usr/local/cuda-12.4
 export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_MODE=offline
 export ACCELERATE_LOG_LEVEL=info
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export CUDA_VISIBLE_DEVICES=1
 # export CUDA_VISIBLE_DEVICES=3
 # 设置中国时区
@@ -94,12 +95,17 @@ fi
 # 创建日志目录
 # TIMESTAMP=$(date -d "+8 hour" +"%Y%m%d_%H%M%S")
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_DIR="logs/${LOG_PREFIX}_${NUM_PROCESSES}_1.5B/${TIMESTAMP}"
+BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-1.5B"
+if [ "$MODE" = "debug" ]; then
+    LOG_DIR="logs/${LOG_PREFIX}_${NUM_PROCESSES}_1.5B/debug"
+    OUTPUT_DIR="${BASE_OUTPUT_DIR}_debug"
+else
+    LOG_DIR="logs/${LOG_PREFIX}_${NUM_PROCESSES}_1.5B/${TIMESTAMP}"
+    OUTPUT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
+fi
 mkdir -p "$LOG_DIR"
 
-# 模型 checkpoint 输出目录（带时间戳，避免覆盖）
-BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-1.5B"
-OUTPUT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
+# 模型 checkpoint 输出目录（train 用时间戳，debug 用固定后缀）
 mkdir -p "$OUTPUT_DIR"
 
 # 显示当前配置参数

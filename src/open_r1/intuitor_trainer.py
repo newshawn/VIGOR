@@ -513,6 +513,26 @@ class INTUITORTrainer(Trainer):
         self.semantic_embedding_model = getattr(args, "semantic_embedding_model", "Qwen/Qwen3-Embedding-4B")
         self.semantic_embedding_timeout = float(getattr(args, "semantic_embedding_timeout", 30.0))
         self.semantic_embedding_batch_size = max(1, int(getattr(args, "semantic_embedding_batch_size", 16)))
+        embedding_dtype_str = getattr(args, "semantic_embedding_dtype", "float16")
+        dtype_map = {
+            "float16": torch.float16,
+            "fp16": torch.float16,
+            "half": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "bf16": torch.bfloat16,
+            "float32": torch.float32,
+            "fp32": torch.float32,
+        }
+        if isinstance(embedding_dtype_str, torch.dtype):
+            self.semantic_embedding_dtype = embedding_dtype_str
+        else:
+            lowered = str(embedding_dtype_str).lower()
+            if lowered not in dtype_map:
+                raise ValueError(
+                    f"Unsupported semantic_embedding_dtype '{embedding_dtype_str}'. "
+                    "Use one of: float16, bfloat16, float32."
+                )
+            self.semantic_embedding_dtype = dtype_map[lowered]
         if self.semantic_similarity_low > self.semantic_similarity_high:
             self.semantic_similarity_low, self.semantic_similarity_high = (
                 self.semantic_similarity_high,
@@ -875,7 +895,12 @@ class INTUITORTrainer(Trainer):
                 return
             vectors = self._request_remote_embeddings(endpoint, headers, buffer_inputs)
             for idx, vec in zip(buffer_indices, vectors):
-                embeddings_list.append(torch.tensor(vec, dtype=torch.float32))
+                vec_tensor = torch.tensor(
+                    vec,
+                    dtype=self.semantic_embedding_dtype,
+                    device="cpu",
+                )
+                embeddings_list.append(vec_tensor)
                 indices.append(idx)
             buffer_inputs.clear()
             buffer_indices.clear()
@@ -895,11 +920,15 @@ class INTUITORTrainer(Trainer):
         else:
             embed_dim = 1
 
-        embeddings = torch.zeros(len(completions_text), embed_dim, dtype=torch.float32)
+        embeddings = torch.zeros(
+            len(completions_text),
+            embed_dim,
+            dtype=self.semantic_embedding_dtype,
+        )
         for idx, vec in zip(indices, embeddings_list):
             embeddings[idx, : vec.size(0)] = vec
 
-        return embeddings.to(device), valid_mask.to(device)
+        return embeddings, valid_mask
 
     def _request_remote_embeddings(
         self,
@@ -1263,7 +1292,7 @@ class INTUITORTrainer(Trainer):
                 with self.accelerator.unwrap_model(self.model).disable_adapter():
                     ref_per_token_logps = self._get_per_token_logps(
                         self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-                    )
+                )
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -1289,12 +1318,14 @@ class INTUITORTrainer(Trainer):
                     "Semantic similarity filter will be skipped for this batch."
                 )
             if embeddings is not None and valid_mask is not None:
+                embeddings_cpu = embeddings.cpu()
+                valid_mask_cpu = valid_mask.cpu()
                 group_count = len(prompts) // self.num_generations
-                embedding_dim = embeddings.size(-1)
-                group_embeddings = embeddings.view(group_count, self.num_generations, embedding_dim).to(device)
-                group_valid_mask = valid_mask.view(group_count, self.num_generations).to(device)
+                embedding_dim = embeddings_cpu.size(-1)
+                group_embeddings = embeddings_cpu.view(group_count, self.num_generations, embedding_dim)
+                group_valid_mask = valid_mask_cpu.view(group_count, self.num_generations)
                 group_mean_similarity = torch.full(
-                    (group_count,), float("nan"), device=device, dtype=torch.float32
+                    (group_count,), float("nan"), dtype=torch.float32
                 )
 
                 for group_idx in range(group_count):
@@ -1302,14 +1333,14 @@ class INTUITORTrainer(Trainer):
                     valid_count = int(valid_entries.sum().item())
                     if valid_count < 2:
                         continue
-                    valid_embeds = group_embeddings[group_idx][valid_entries].contiguous()
+                    valid_embeds = group_embeddings[group_idx][valid_entries].contiguous().to(dtype=torch.float32)
                     valid_embeds = F.normalize(valid_embeds, p=2, dim=-1)
                     similarity_matrix = valid_embeds @ valid_embeds.T
-                    triu_idx = torch.triu_indices(valid_count, valid_count, offset=1, device=device)
+                    triu_idx = torch.triu_indices(valid_count, valid_count, offset=1)
                     mean_similarity = similarity_matrix[triu_idx[0], triu_idx[1]].mean()
                     group_mean_similarity[group_idx] = mean_similarity
 
-                group_filter = torch.ones(group_count, dtype=torch.bool, device=device)
+                group_filter = torch.ones(group_count, dtype=torch.bool)
                 valid_similarity = ~torch.isnan(group_mean_similarity)
                 if self.semantic_similarity_low > 0.0:
                     group_filter[valid_similarity] &= (
@@ -1320,11 +1351,17 @@ class INTUITORTrainer(Trainer):
                         group_mean_similarity[valid_similarity] <= self.semantic_similarity_high
                     )
 
-                semantic_filter_mask = group_filter.repeat_interleave(self.num_generations)
+                group_filter_device = group_filter.to(device=device)
+                semantic_filter_mask = group_filter_device.repeat_interleave(self.num_generations)
                 semantic_filter_stats = {
-                    "group_mean_similarity": group_mean_similarity, # 平均的相似度
-                    "group_filter": group_filter,
+                    "group_mean_similarity": group_mean_similarity.to(device=device), # 平均的相似度
+                    "group_filter": group_filter_device,
                 }
+        if semantic_filter_mask is not None:
+            self.accelerator.wait_for_everyone()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
         rewards_per_func = torch.zeros(len(prompts), max(len(self.reward_funcs),1), device=device)
         # intuitor里面的reward_func=accuracy 但是 weights=0
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(

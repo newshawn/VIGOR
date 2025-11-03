@@ -50,11 +50,11 @@ class GRPOConfig(trl.GRPOConfig):
         metadata={"help": "Weight applied to the semantic regularizer. Set to 0.0 to disable."},
     )
     semantic_similarity_low: float = field(
-        default=0.20,
+        default=0.0,
         metadata={"help": "Lower bound for mean pairwise similarity. Prompts below this will be filtered."},
     )
     semantic_similarity_high: float = field(
-        default=0.85,
+        default=0.90,
         metadata={"help": "Upper bound for mean pairwise similarity. Prompts above this will be filtered."},
     )
     semantic_embedding_api_base: Optional[str] = field(
@@ -81,6 +81,13 @@ class GRPOConfig(trl.GRPOConfig):
     semantic_embedding_batch_size: int = field(
         default=16,
         metadata={"help": "Maximum number of texts sent per embedding API request."},
+    )
+    semantic_embedding_dtype: str = field(
+        default="float16",
+        metadata={
+            "help": "Torch dtype used to store semantic embeddings. "
+            "Supported: 'float16', 'bfloat16', 'float32'. Lower dtypes reduce memory."
+        },
     )
     hub_model_revision: Optional[str] = field(
         default="main", metadata={"help": "The Hub model branch to push the model to."}

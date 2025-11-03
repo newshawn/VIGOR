@@ -6,7 +6,7 @@
 
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
-export CUDA_VISIBLE_DEVICES=6
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 # 确保 HF 本地缓存与离线模式（集群/无网环境使用本地缓存）
@@ -52,7 +52,12 @@ DEFAULT_MODEL=/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuito
 # )
 
 MODELS=(
-  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251028_124723/checkpoint-80/"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-10/"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-20/" 
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-30/"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-40/"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-50/"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-60/"
 )
 
 # 收集待评测的模型列表：优先使用上方 MODELS 数组；否则使用命令行参数；再否则用 DEFAULT_MODEL
