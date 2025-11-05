@@ -1,5 +1,5 @@
 #!/bin/bash
-
+export NCCL_P2P_DISABLE=1
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
 which python
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor

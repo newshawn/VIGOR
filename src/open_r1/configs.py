@@ -46,10 +46,24 @@ class GRPOConfig(trl.GRPOConfig):
         },
     )
     ref_reward_weight: float = field(
-        default=0.5,
+        default=0.0,
         metadata={
             "help": "Weight applied to the reference-model log-probability reward (negative perplexity). Set to 0 to disable."
         },
+    )
+    tail_repeat_reward_weight: float = field(
+        default=0.5,
+        metadata={
+            "help": "Weight applied to the tail repetition penalty reward. Positive values penalize long repeated tokens."
+        },
+    )
+    tail_repeat_min_run: int = field(
+        default=4,
+        metadata={"help": "Minimum tail run length before the repetition penalty activates."},
+    )
+    tail_repeat_penalty_scale: float = field(
+        default=1.0,
+        metadata={"help": "Linear scale applied to the tail repetition penalty once the min run is exceeded."},
     )
     semantic_reward_weight: float = field(
         default=0.0,

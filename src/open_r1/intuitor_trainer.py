@@ -415,9 +415,13 @@ class INTUITORTrainer(Trainer):
 
         # Reference model
         self.beta = args.beta
-        self.ref_reward_weight = getattr(args, "ref_reward_weight", 0.0)
+        self.ref_reward_weight = float(getattr(args, "ref_reward_weight", 0.0))
         self._ref_reward_enabled = self.ref_reward_weight != 0.0
         self._needs_ref_model = (self.beta != 0.0) or self._ref_reward_enabled
+        self.tail_repeat_reward_weight = float(getattr(args, "tail_repeat_reward_weight", 0.0))
+        self.tail_repeat_min_run = max(1, int(getattr(args, "tail_repeat_min_run", 4)))
+        self.tail_repeat_penalty_scale = float(getattr(args, "tail_repeat_penalty_scale", 1.0))
+        self._tail_repeat_enabled = self.tail_repeat_reward_weight != 0.0
         if not self._needs_ref_model:
             # Neither KL penalty nor reference reward is active; no ref model needed.
             self.ref_model = None
@@ -1085,6 +1089,32 @@ class INTUITORTrainer(Trainer):
 
         return torch.stack(rewards).to(device=model_device, dtype=torch.float32)
 
+    def _compute_tail_repeat_reward(self, completion_ids: torch.Tensor, completion_mask: torch.Tensor) -> Optional[torch.Tensor]:
+        if not self._tail_repeat_enabled:
+            return None
+        device = completion_ids.device
+        penalties = torch.zeros(completion_ids.size(0), device=device, dtype=torch.float32)
+        lengths = completion_mask.sum(dim=1).to(torch.int64)
+        min_run = self.tail_repeat_min_run
+        scale = self.tail_repeat_penalty_scale
+
+        for idx in range(completion_ids.size(0)):
+            seq_len = int(lengths[idx].item())
+            if seq_len <= 0:
+                continue
+            tokens = completion_ids[idx, :seq_len]
+            last_token = tokens[-1]
+            run_length = 1
+            for pos in range(seq_len - 2, -1, -1):
+                if tokens[pos] == last_token:
+                    run_length += 1
+                else:
+                    break
+            excess = run_length - min_run + 1
+            if excess > 0:
+                penalties[idx] = -scale * excess
+        return penalties
+
     @profiling_decorator
     def _move_model_to_vllm(self):
         # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
@@ -1303,6 +1333,9 @@ class INTUITORTrainer(Trainer):
             ref_logprob_rewards = (
                 (ref_per_token_logps * completion_mask).sum(dim=1) / completion_lengths
             ).detach()
+        tail_repeat_rewards = self._compute_tail_repeat_reward(completion_ids, completion_mask)
+        if tail_repeat_rewards is not None:
+            tail_repeat_rewards = tail_repeat_rewards.detach()
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -1440,6 +1473,12 @@ class INTUITORTrainer(Trainer):
         else:
             gathered_ref_rewards = None
             ref_rewards_for_logging = None
+        if tail_repeat_rewards is not None:
+            gathered_tail_repeat_rewards = gather(tail_repeat_rewards)
+            tail_repeat_rewards_for_logging = gathered_tail_repeat_rewards.detach().cpu().tolist()
+        else:
+            gathered_tail_repeat_rewards = None
+            tail_repeat_rewards_for_logging = None
         # === 新增：全局 min-max 归一化，将 KL 奖励映射到 [0, 1] ===
         kl_min = gathered_kl_rewards.min()
         kl_max = gathered_kl_rewards.max()
@@ -1502,6 +1541,30 @@ class INTUITORTrainer(Trainer):
         else:
             ref_advantage = torch.zeros_like(kl_rewards)
             ref_advantages_all = torch.zeros_like(reward_advantages_all)
+        # import pdb; pdb.set_trace()
+        tail_repeat_reward_record = None
+        tail_repeat_reward_std_record = None
+        if gathered_tail_repeat_rewards is not None:
+            tail_repeat_grouped = gathered_tail_repeat_rewards.view(-1, self.num_generations)
+            mean_tail_repeat = tail_repeat_grouped.mean(dim=1)
+            std_tail_repeat = tail_repeat_grouped.std(dim=1)
+            tail_repeat_reward_record = mean_tail_repeat.mean().item()
+            tail_repeat_reward_std_record = std_tail_repeat.mean().item()
+            mean_tail_repeat = mean_tail_repeat.repeat_interleave(self.num_generations, dim=0)
+            std_tail_repeat = std_tail_repeat.repeat_interleave(self.num_generations, dim=0)
+            mean_tail_repeat_all = mean_tail_repeat.detach().clone()
+            std_tail_repeat_all = std_tail_repeat.detach().clone()
+            mean_tail_repeat_local = mean_tail_repeat[process_slice]
+            std_tail_repeat_local = std_tail_repeat[process_slice]
+            tail_repeat_advantage = (tail_repeat_rewards - mean_tail_repeat_local) / (std_tail_repeat_local + 1e-4)
+            tail_repeat_advantage = tail_repeat_advantage * self.tail_repeat_reward_weight
+            tail_repeat_advantages_all = (gathered_tail_repeat_rewards.view(-1) - mean_tail_repeat_all) / (
+                std_tail_repeat_all + 1e-4
+            )
+            tail_repeat_advantages_all = tail_repeat_advantages_all * self.tail_repeat_reward_weight
+        else:
+            tail_repeat_advantage = torch.zeros_like(kl_rewards)
+            tail_repeat_advantages_all = torch.zeros_like(reward_advantages_all)
 
         gathered_kl_rewards = gathered_kl_rewards.view(-1, self.num_generations)    # (prompt_group, num_generations)
         mean_kl_rewards = gathered_kl_rewards.mean(dim=1)   # (prompt_group,) 每个 prompt 小组内部做均值
@@ -1522,7 +1585,7 @@ class INTUITORTrainer(Trainer):
         std_kl_rewards = std_kl_rewards[process_slice]
         # 逐个元素相减，计算 KL 奖励的优势
         kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)
-        total_advantage = kl_advantage + advantages + ref_advantage
+        total_advantage = kl_advantage + advantages + ref_advantage + tail_repeat_advantage
         # import pdb; pdb.set_trace()
         # Log the metrics
         if mode == "train":
@@ -1574,11 +1637,18 @@ class INTUITORTrainer(Trainer):
         if ref_reward_record is not None:
             self._metrics[mode]["rewards/ref_logprob/mean"].append(ref_reward_record)
             self._metrics[mode]["rewards/ref_logprob/std"].append(ref_reward_std_record)
+        if tail_repeat_reward_record is not None:
+            self._metrics[mode]["rewards/tail_repeat/mean"].append(tail_repeat_reward_record)
+            self._metrics[mode]["rewards/tail_repeat/std"].append(tail_repeat_reward_std_record)
         # 监测 kl 的 advantage的平均值，为0才正常
         self._metrics[mode]["advantages/kl_mean"].append(self.accelerator.gather_for_metrics(kl_advantage).nanmean().item())
         if gathered_ref_rewards is not None:
             self._metrics[mode]["advantages/ref_mean"].append(
                 self.accelerator.gather_for_metrics(ref_advantage).nanmean().item()
+            )
+        if gathered_tail_repeat_rewards is not None:
+            self._metrics[mode]["advantages/tail_repeat_mean"].append(
+                self.accelerator.gather_for_metrics(tail_repeat_advantage).nanmean().item()
             )
         self._metrics[mode]["advantages/total_mean"].append(self.accelerator.gather_for_metrics(total_advantage).nanmean().item())
         # Log prompt and completion texts
@@ -1591,6 +1661,8 @@ class INTUITORTrainer(Trainer):
         self._textual_logs["rewards"]["kl_reward_norm"].extend(kl_rewards_norm_for_logging)
         if ref_rewards_for_logging is not None:
             self._textual_logs["rewards"]["ref_logprob_reward"].extend(ref_rewards_for_logging)
+        if tail_repeat_rewards_for_logging is not None:
+            self._textual_logs["rewards"]["tail_repeat_reward"].extend(tail_repeat_rewards_for_logging)
 
         # 记录 KL/Total 的优势项到 textual_logs（全局对齐，支持多卡）：
         # 使用 gather 后的全局 KL 奖励与对应均值/方差，得到每个 completion 的 KL 优势
@@ -1606,6 +1678,10 @@ class INTUITORTrainer(Trainer):
         if ref_advantages_all is not None:
             self._textual_logs["rewards"]["ref_logprob_advantage"].extend(
                 ref_advantages_all.detach().cpu().tolist()
+            )
+        if tail_repeat_advantages_all is not None:
+            self._textual_logs["rewards"]["tail_repeat_advantage"].extend(
+                tail_repeat_advantages_all.detach().cpu().tolist()
             )
         self._textual_logs["rewards"]["total_advantage"].extend(total_advantages_all.detach().cpu().tolist())
 
