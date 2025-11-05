@@ -46,13 +46,13 @@ class GRPOConfig(trl.GRPOConfig):
         },
     )
     ref_reward_weight: float = field(
-        default=0.0,
+        default=0.5,
         metadata={
             "help": "Weight applied to the reference-model log-probability reward (negative perplexity). Set to 0 to disable."
         },
     )
     tail_repeat_reward_weight: float = field(
-        default=0.5,
+        default=0.0,
         metadata={
             "help": "Weight applied to the tail repetition penalty reward. Positive values penalize long repeated tokens."
         },

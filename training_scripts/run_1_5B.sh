@@ -13,7 +13,7 @@ export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_MODE=offline
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 # export CUDA_VISIBLE_DEVICES=3
 # 设置中国时区
 # export TZ='Asia/Shanghai'

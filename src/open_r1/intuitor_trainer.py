@@ -1434,10 +1434,11 @@ class INTUITORTrainer(Trainer):
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
 
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+        semantic_mask_local = None
         if semantic_filter_mask is not None:
             mask = semantic_filter_mask.to(device=device)
             rewards_per_func = torch.where(mask.unsqueeze(1), rewards_per_func, torch.zeros_like(rewards_per_func))
-            kl_rewards = torch.where(mask, kl_rewards, torch.zeros_like(kl_rewards))
+            semantic_mask_local = mask.float()
         filtered_group_ratio = None
         mean_similarity_stats = None
         if semantic_filter_stats is not None:
@@ -1479,6 +1480,10 @@ class INTUITORTrainer(Trainer):
         else:
             gathered_tail_repeat_rewards = None
             tail_repeat_rewards_for_logging = None
+        if semantic_mask_local is not None:
+            semantic_mask_all = gather(semantic_mask_local).to(device=device)
+        else:
+            semantic_mask_all = None
         # === 新增：全局 min-max 归一化，将 KL 奖励映射到 [0, 1] ===
         kl_min = gathered_kl_rewards.min()
         kl_max = gathered_kl_rewards.max()
@@ -1511,6 +1516,9 @@ class INTUITORTrainer(Trainer):
         else:
             advantages = torch.zeros_like(rewards)
 
+        if semantic_mask_all is not None:
+            advantages = advantages * semantic_mask_all
+
         # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts),
@@ -1519,6 +1527,10 @@ class INTUITORTrainer(Trainer):
         # Save a copy of reward-based advantages for logging before slicing to local partition
         reward_advantages_all = advantages.detach().clone()
         advantages = advantages[process_slice]
+        if semantic_mask_all is not None:
+            semantic_mask_local_slice = semantic_mask_all[process_slice]
+        else:
+            semantic_mask_local_slice = None
         ref_reward_record = None
         ref_reward_std_record = None
         if gathered_ref_rewards is not None:
@@ -1585,7 +1597,14 @@ class INTUITORTrainer(Trainer):
         std_kl_rewards = std_kl_rewards[process_slice]
         # 逐个元素相减，计算 KL 奖励的优势
         kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)
+        if semantic_mask_local_slice is not None:
+            advantages = advantages * semantic_mask_local_slice
+            kl_advantage = kl_advantage * semantic_mask_local_slice
+            ref_advantage = ref_advantage * semantic_mask_local_slice
+            tail_repeat_advantage = tail_repeat_advantage * semantic_mask_local_slice
         total_advantage = kl_advantage + advantages + ref_advantage + tail_repeat_advantage
+        if semantic_mask_local_slice is not None:
+            total_advantage = total_advantage * semantic_mask_local_slice
         # import pdb; pdb.set_trace()
         # Log the metrics
         if mode == "train":
@@ -1668,8 +1687,19 @@ class INTUITORTrainer(Trainer):
         # 使用 gather 后的全局 KL 奖励与对应均值/方差，得到每个 completion 的 KL 优势
         gathered_kl_rewards_flat = gathered_kl_rewards.reshape(-1)
         kl_advantages_all = (gathered_kl_rewards_flat - mean_kl_rewards_all) / (std_kl_rewards_all + 1e-4)
+        if semantic_mask_all is not None:
+            kl_advantages_all = kl_advantages_all * semantic_mask_all
+            reward_advantages_all = reward_advantages_all * semantic_mask_all
+        if ref_advantages_all is not None and semantic_mask_all is not None:
+            ref_advantages_all = ref_advantages_all * semantic_mask_all
+        if tail_repeat_advantages_all is not None and semantic_mask_all is not None:
+            tail_repeat_advantages_all = tail_repeat_advantages_all * semantic_mask_all
         # total 优势 = KL 优势 +（任务奖励优势，已在切片前缓存为 reward_advantages_all）
         total_advantages_all = reward_advantages_all + kl_advantages_all + ref_advantages_all
+        if tail_repeat_advantages_all is not None:
+            total_advantages_all = total_advantages_all + tail_repeat_advantages_all
+        if semantic_mask_all is not None:
+            total_advantages_all = total_advantages_all * semantic_mask_all
         # 放入 advantages 命名空间，便于控制台分组打印与 wandb 独立列
         # self._textual_logs["advantages"]["kl"].extend(kl_advantages_all.detach().cpu().tolist())
         # self._textual_logs["advantages"]["total"].extend(total_advantages_all.detach().cpu().tolist())
