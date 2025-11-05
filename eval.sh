@@ -6,7 +6,7 @@
 
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 # 确保 HF 本地缓存与离线模式（集群/无网环境使用本地缓存）
@@ -42,29 +42,40 @@ DEFAULT_MODEL=/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuito
 # DEFAULT_MODEL=/run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B
 # DEFAULT_MODEL=/home/wenxuexiang/projects/Intuitor/open-r1-intuitor/data/Qwen2.5-1.5B-Intuitor/checkpoint-58
 
-# 在此处填写多个模型路径；留空则使用命令行参数或 DEFAULT_MODEL
-# 例如：
+# 在此处填写多个模型路径；留空则使用外部传参或 DEFAULT_MODEL
 # MODELS=(
 #   "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-grpo-3B_20251014_152032/checkpoint-30/"
 #   "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-grpo-3B_20251014_152032/checkpoint-40/"
-#   "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-grpo-3B_20251014_152032/checkpoint-50/"
-#   "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-grpo-3B_20251014_152032/checkpoint-60/"
 # )
-
 MODELS=(
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-10/"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-20/" 
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-30/"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-40/"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-50/"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251031_134833/checkpoint-60/"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251104_084223/checkpoint-10/"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251104_084223/checkpoint-20/"
 )
 
-# 收集待评测的模型列表：优先使用上方 MODELS 数组；否则使用命令行参数；再否则用 DEFAULT_MODEL
-if [ ${#MODELS[@]} -gt 0 ]; then
+# 允许通过环境变量传参（便于集群作业/自动化脚本）
+#   MODEL_PATH=<单个模型>
+#   MODEL_PATHS="path1 path2" (或逗号分隔)
+declare -a INPUT_MODELS=()
+if [[ -n "${MODEL_PATH:-}" ]]; then
+  INPUT_MODELS+=("$MODEL_PATH")
+fi
+if [[ -n "${MODEL_PATHS:-}" ]]; then
+  # 支持逗号/空白分隔
+  IFS=', ' read -r -a __MODEL_PATHS_ARRAY <<< "$MODEL_PATHS"
+  for path in "${__MODEL_PATHS_ARRAY[@]}"; do
+    [[ -z "$path" ]] && continue
+    INPUT_MODELS+=("$path")
+  done
+fi
+if [[ "$#" -gt 0 ]]; then
+  INPUT_MODELS+=("$@")
+fi
+
+# 收集待评测的模型列表：优先使用外部传参；否则使用上方 MODELS；再否则用 DEFAULT_MODEL
+if [ ${#INPUT_MODELS[@]} -gt 0 ]; then
+  MODELS_TO_RUN=("${INPUT_MODELS[@]}")
+elif [ ${#MODELS[@]} -gt 0 ]; then
   MODELS_TO_RUN=("${MODELS[@]}")
-elif [ "$#" -gt 0 ]; then
-  MODELS_TO_RUN=("$@")
 else
   MODELS_TO_RUN=("$DEFAULT_MODEL")
 fi

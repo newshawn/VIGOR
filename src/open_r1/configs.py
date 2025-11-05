@@ -45,6 +45,12 @@ class GRPOConfig(trl.GRPOConfig):
             "help": "Step size eta used for the KL-based reward approximation. Defaults to learning_rate when unset."
         },
     )
+    ref_reward_weight: float = field(
+        default=0.5,
+        metadata={
+            "help": "Weight applied to the reference-model log-probability reward (negative perplexity). Set to 0 to disable."
+        },
+    )
     semantic_reward_weight: float = field(
         default=0.0,
         metadata={"help": "Weight applied to the semantic regularizer. Set to 0.0 to disable."},

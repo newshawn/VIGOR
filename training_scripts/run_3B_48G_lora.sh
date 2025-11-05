@@ -63,6 +63,7 @@ mkdir -p "$LOG_DIR"
 
 # 模型 checkpoint 输出目录（带时间戳，避免覆盖）
 BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B"
+# OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251104_084223"
 OUTPUT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
 mkdir -p "$OUTPUT_DIR"
 

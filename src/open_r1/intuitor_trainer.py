@@ -415,14 +415,16 @@ class INTUITORTrainer(Trainer):
 
         # Reference model
         self.beta = args.beta
-        if self.beta == 0.0:
-            # If beta is 0.0, the reference model is not needed
+        self.ref_reward_weight = getattr(args, "ref_reward_weight", 0.0)
+        self._ref_reward_enabled = self.ref_reward_weight != 0.0
+        self._needs_ref_model = (self.beta != 0.0) or self._ref_reward_enabled
+        if not self._needs_ref_model:
+            # Neither KL penalty nor reference reward is active; no ref model needed.
             self.ref_model = None
         elif is_deepspeed_zero3_enabled():
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif is_peft_model(model):
-            # If PEFT is used, the reference model is not needed since the adapter can be disabled
-            # to revert to the initial model.
+            # With PEFT we can disable adapters to recover the base weights instead of keeping a duplicate copy.
             self.ref_model = None
         else:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
@@ -985,6 +987,7 @@ class INTUITORTrainer(Trainer):
             logits = logits / self.temperature
             logps = selective_log_softmax(logits, input_ids_batch)  # compute logprobs for the input tokens
             all_logps.append(logps)
+            # import pdb; pdb.set_trace()
         return torch.cat(all_logps, dim=0)
 
     def _get_kl_reward_parameters(self, model: nn.Module) -> list[torch.nn.Parameter]:
@@ -1282,7 +1285,7 @@ class INTUITORTrainer(Trainer):
             else:   # 只迭代一次，不需要保存旧策略
                 old_per_token_logps = None
 
-            if self.beta == 0.0:    # 0.005
+            if not self._needs_ref_model:
                 ref_per_token_logps = None
             elif self.ref_model is not None:    # not None
                 ref_per_token_logps = self._get_per_token_logps(
@@ -1293,6 +1296,13 @@ class INTUITORTrainer(Trainer):
                     ref_per_token_logps = self._get_per_token_logps(
                         self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
+
+        ref_logprob_rewards = None
+        if self._ref_reward_enabled and ref_per_token_logps is not None:
+            completion_lengths = completion_mask.sum(dim=1).clamp(min=1).float()
+            ref_logprob_rewards = (
+                (ref_per_token_logps * completion_mask).sum(dim=1) / completion_lengths
+            ).detach()
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -1424,6 +1434,12 @@ class INTUITORTrainer(Trainer):
         rewards_per_func = gather(rewards_per_func)
         gathered_kl_rewards = gather(kl_rewards)    # 将所有gpu的kl_reward聚集到一起
         kl_rewards_for_logging = gathered_kl_rewards.detach().cpu().tolist()
+        if ref_logprob_rewards is not None:
+            gathered_ref_rewards = gather(ref_logprob_rewards)
+            ref_rewards_for_logging = gathered_ref_rewards.detach().cpu().tolist()
+        else:
+            gathered_ref_rewards = None
+            ref_rewards_for_logging = None
         # === 新增：全局 min-max 归一化，将 KL 奖励映射到 [0, 1] ===
         kl_min = gathered_kl_rewards.min()
         kl_max = gathered_kl_rewards.max()
@@ -1464,6 +1480,28 @@ class INTUITORTrainer(Trainer):
         # Save a copy of reward-based advantages for logging before slicing to local partition
         reward_advantages_all = advantages.detach().clone()
         advantages = advantages[process_slice]
+        ref_reward_record = None
+        ref_reward_std_record = None
+        if gathered_ref_rewards is not None:
+            ref_rewards_grouped = gathered_ref_rewards.view(-1, self.num_generations)
+            mean_ref_rewards = ref_rewards_grouped.mean(dim=1)
+            std_ref_rewards = ref_rewards_grouped.std(dim=1)
+            ref_reward_record = mean_ref_rewards.mean().item()
+            ref_reward_std_record = std_ref_rewards.mean().item()
+            mean_ref_rewards = mean_ref_rewards.repeat_interleave(self.num_generations, dim=0)
+            std_ref_rewards = std_ref_rewards.repeat_interleave(self.num_generations, dim=0)
+            mean_ref_rewards_all = mean_ref_rewards.detach().clone()
+            std_ref_rewards_all = std_ref_rewards.detach().clone()
+            mean_ref_rewards_local = mean_ref_rewards[process_slice]
+            std_ref_rewards_local = std_ref_rewards[process_slice]
+            ref_advantage = (ref_logprob_rewards - mean_ref_rewards_local) / (std_ref_rewards_local + 1e-4)
+            ref_advantage = ref_advantage * self.ref_reward_weight
+            gathered_ref_rewards_flat = gathered_ref_rewards.view(-1)
+            ref_advantages_all = (gathered_ref_rewards_flat - mean_ref_rewards_all) / (std_ref_rewards_all + 1e-4)
+            ref_advantages_all = ref_advantages_all * self.ref_reward_weight
+        else:
+            ref_advantage = torch.zeros_like(kl_rewards)
+            ref_advantages_all = torch.zeros_like(reward_advantages_all)
 
         gathered_kl_rewards = gathered_kl_rewards.view(-1, self.num_generations)    # (prompt_group, num_generations)
         mean_kl_rewards = gathered_kl_rewards.mean(dim=1)   # (prompt_group,) 每个 prompt 小组内部做均值
@@ -1484,7 +1522,7 @@ class INTUITORTrainer(Trainer):
         std_kl_rewards = std_kl_rewards[process_slice]
         # 逐个元素相减，计算 KL 奖励的优势
         kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)
-        total_advantage = kl_advantage + advantages
+        total_advantage = kl_advantage + advantages + ref_advantage
         # import pdb; pdb.set_trace()
         # Log the metrics
         if mode == "train":
@@ -1533,8 +1571,15 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
         self._metrics[mode]["rewards/kl_reward/mean"].append(kl_reward_record)
         self._metrics[mode]["rewards/kl_reward/std"].append(kl_reward_std_record)
+        if ref_reward_record is not None:
+            self._metrics[mode]["rewards/ref_logprob/mean"].append(ref_reward_record)
+            self._metrics[mode]["rewards/ref_logprob/std"].append(ref_reward_std_record)
         # 监测 kl 的 advantage的平均值，为0才正常
         self._metrics[mode]["advantages/kl_mean"].append(self.accelerator.gather_for_metrics(kl_advantage).nanmean().item())
+        if gathered_ref_rewards is not None:
+            self._metrics[mode]["advantages/ref_mean"].append(
+                self.accelerator.gather_for_metrics(ref_advantage).nanmean().item()
+            )
         self._metrics[mode]["advantages/total_mean"].append(self.accelerator.gather_for_metrics(total_advantage).nanmean().item())
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
@@ -1544,18 +1589,24 @@ class INTUITORTrainer(Trainer):
         self._textual_logs["rewards"]["kl_reward"].extend(kl_rewards_for_logging)
         # 追加记录归一化后的 KL 奖励（范围约为 [0,1]）
         self._textual_logs["rewards"]["kl_reward_norm"].extend(kl_rewards_norm_for_logging)
+        if ref_rewards_for_logging is not None:
+            self._textual_logs["rewards"]["ref_logprob_reward"].extend(ref_rewards_for_logging)
 
         # 记录 KL/Total 的优势项到 textual_logs（全局对齐，支持多卡）：
         # 使用 gather 后的全局 KL 奖励与对应均值/方差，得到每个 completion 的 KL 优势
         gathered_kl_rewards_flat = gathered_kl_rewards.reshape(-1)
         kl_advantages_all = (gathered_kl_rewards_flat - mean_kl_rewards_all) / (std_kl_rewards_all + 1e-4)
         # total 优势 = KL 优势 +（任务奖励优势，已在切片前缓存为 reward_advantages_all）
-        total_advantages_all = reward_advantages_all + kl_advantages_all
+        total_advantages_all = reward_advantages_all + kl_advantages_all + ref_advantages_all
         # 放入 advantages 命名空间，便于控制台分组打印与 wandb 独立列
         # self._textual_logs["advantages"]["kl"].extend(kl_advantages_all.detach().cpu().tolist())
         # self._textual_logs["advantages"]["total"].extend(total_advantages_all.detach().cpu().tolist())
         # # 同时放入 rewards 命名空间，便于与其它 reward 列并列查看（wandb 会通过 **rewards 展开为列）
         self._textual_logs["rewards"]["kl_advantage"].extend(kl_advantages_all.detach().cpu().tolist())
+        if ref_advantages_all is not None:
+            self._textual_logs["rewards"]["ref_logprob_advantage"].extend(
+                ref_advantages_all.detach().cpu().tolist()
+            )
         self._textual_logs["rewards"]["total_advantage"].extend(total_advantages_all.detach().cpu().tolist())
 
         return {
