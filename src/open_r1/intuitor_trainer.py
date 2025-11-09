@@ -14,15 +14,18 @@
 
 # This file is adapted from trl-0.18.0 grpo_trainer.py
 
+import math
 import os
 import textwrap
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import datasets
+import numpy as np
 import requests
 import torch
 import torch.nn.functional as F
@@ -71,6 +74,14 @@ if is_liger_kernel_available():
 
 if is_wandb_available():
     import wandb
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -645,6 +656,18 @@ class INTUITORTrainer(Trainer):
         }
         # Cursor for grouped textual logging
         self._last_grouped_log_index = 0
+        # Buffers for optional KL reward plotting
+        self.kl_reward_plot_enabled = bool(getattr(args, "kl_reward_plot_enabled", False))
+        self.kl_reward_plot_every_n_steps = max(1, int(getattr(args, "kl_reward_plot_every_n_steps", 1)))
+        self.kl_reward_plot_max_prompts = max(1, int(getattr(args, "kl_reward_plot_max_prompts", 30)))
+        self._kl_plot_buffer = {
+            "prompt": deque(maxlen=maxlen),
+            "kl_reward_norm": deque(maxlen=maxlen),
+            "ref_reward": deque(maxlen=maxlen),
+        }
+        self._kl_plot_dir = Path(self.args.output_dir).resolve() / "kl_reward_plots"
+        self._last_kl_plot_step = -1
+        self._kl_plot_warning_emitted = False
 
         # Check if the effective batch size can be divided by the number of generations
         if self.num_generations < 2:
@@ -1671,8 +1694,15 @@ class INTUITORTrainer(Trainer):
             )
         self._metrics[mode]["advantages/total_mean"].append(self.accelerator.gather_for_metrics(total_advantage).nanmean().item())
         # Log prompt and completion texts
-        self._textual_logs["prompt"].extend(gather_object(prompts_text))
-        self._textual_logs["completion"].extend(gather_object(completions_text))
+        gathered_prompts = gather_object(prompts_text)
+        gathered_completions = gather_object(completions_text)
+        self._textual_logs["prompt"].extend(gathered_prompts)
+        self._textual_logs["completion"].extend(gathered_completions)
+        if mode == "train" and self.kl_reward_plot_enabled:
+            self._kl_plot_buffer["prompt"].extend(gathered_prompts)
+            self._kl_plot_buffer["kl_reward_norm"].extend(kl_rewards_norm_for_logging)
+            if ref_rewards_for_logging is not None:
+                self._kl_plot_buffer["ref_reward"].extend(ref_rewards_for_logging)
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._textual_logs["rewards"]["kl_reward"].extend(kl_rewards_for_logging)
@@ -1854,6 +1884,267 @@ class INTUITORTrainer(Trainer):
                 if self.wandb_log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
                 wandb.log({"completions": wandb.Table(dataframe=df)})
+
+        self._maybe_save_kl_reward_plot()
+
+    def _clear_reward_plot_buffer(self) -> None:
+        for buf in self._kl_plot_buffer.values():
+            buf.clear()
+
+    def _maybe_save_kl_reward_plot(self) -> None:
+        """Persist reward heatmaps whenever the feature is enabled."""
+        if not self.kl_reward_plot_enabled:
+            self._clear_reward_plot_buffer()
+            return
+        if plt is None:
+            if not self._kl_plot_warning_emitted:
+                warnings.warn(
+                    "matplotlib is not available in this environment; disabling reward plotting."
+                )
+                self._kl_plot_warning_emitted = True
+            self._clear_reward_plot_buffer()
+            return
+        if not self.accelerator.is_main_process:
+            self._clear_reward_plot_buffer()
+            return
+        if not self._kl_plot_buffer["prompt"]:
+            return
+
+        step = int(self.state.global_step)
+        if step <= 0 or step == self._last_kl_plot_step:
+            self._clear_reward_plot_buffer()
+            return
+        if step % self.kl_reward_plot_every_n_steps != 0:
+            self._clear_reward_plot_buffer()
+            self._last_kl_plot_step = step
+            return
+
+        prompts = list(self._kl_plot_buffer["prompt"])
+        kl_rewards_norm = list(self._kl_plot_buffer["kl_reward_norm"])
+        ref_rewards = list(self._kl_plot_buffer["ref_reward"])
+
+        try:
+            if kl_rewards_norm:
+                if len(prompts) != len(kl_rewards_norm):
+                    warnings.warn("Prompt/KL buffer size mismatch; skipping KL reward plot for this step.")
+                else:
+                    self._save_reward_heatmap(
+                        step,
+                        prompts,
+                        kl_rewards_norm,
+                        metric_label="KL Reward (normalized)",
+                        file_prefix="kl_reward",
+                    )
+            if ref_rewards:
+                if len(prompts) != len(ref_rewards):
+                    warnings.warn("Prompt/ref buffer size mismatch; skipping ref reward plot for this step.")
+                else:
+                    self._save_reward_heatmap(
+                        step,
+                        prompts,
+                        ref_rewards,
+                        metric_label="Ref Logprob Reward",
+                        file_prefix="ref_reward",
+                    )
+            self._last_kl_plot_step = step
+        except Exception as exc:  # pragma: no cover - best-effort plotting
+            warnings.warn(f"Failed to save reward plot at step {step}: {exc}")
+        finally:
+            self._clear_reward_plot_buffer()
+
+    def _save_reward_heatmap(
+        self,
+        step: int,
+        prompts: list[str],
+        reward_values: list[float],
+        *,
+        metric_label: str,
+        file_prefix: str,
+    ) -> None:
+        """Render and save a reward heatmap for the provided prompts."""
+        group_size = self.num_generations
+        total = len(prompts)
+        if group_size <= 0 or total < group_size:
+            return
+        if total % group_size != 0:
+            warnings.warn(
+                f"Cannot reshape {metric_label} into prompt groups: total={total}, num_generations={group_size}."
+            )
+            return
+
+        prompt_groups = []
+        for group_idx in range(total // group_size):
+            start = group_idx * group_size
+            end = start + group_size
+            raw_values = reward_values[start:end]
+            tensor_values = torch.tensor(raw_values, dtype=torch.float32)
+            finite_mask = torch.isfinite(tensor_values)
+            if not finite_mask.any():
+                continue
+            finite_values = tensor_values[finite_mask]
+            mean_tensor = finite_values.mean()
+            std_tensor = finite_values.std(unbiased=False)
+            std_val = float(std_tensor.item())
+            mean_val = float(mean_tensor.item())
+            if finite_values.numel() >= 2 and std_val > 0:
+                centered = finite_values - mean_tensor
+                kurt_tensor = centered.pow(4).mean() / (std_tensor.pow(4) + 1e-12)
+                kurt_val = float(kurt_tensor.item())
+            else:
+                kurt_val = float("nan")
+            prompt_groups.append(
+                {
+                    "prompt": self._format_prompt_label(prompts[start]),
+                    "values": torch.nan_to_num(tensor_values, nan=0.0).tolist(),
+                    "std": std_val,
+                    "min": float(finite_values.min().item()),
+                    "max": float(finite_values.max().item()),
+                    "mean": mean_val,
+                    "kurtosis": kurt_val,
+                }
+            )
+
+        if not prompt_groups:
+            return
+
+        prompt_groups.sort(key=lambda entry: entry["std"], reverse=True)
+        prompt_groups = prompt_groups[: self.kl_reward_plot_max_prompts]
+
+        heatmap_data = torch.tensor([entry["values"] for entry in prompt_groups], dtype=torch.float32).numpy()
+        data_min = float(heatmap_data.min())
+        data_max = float(heatmap_data.max())
+        if abs(data_max - data_min) < 1e-6:
+            data_max = data_min + 1e-6
+        num_rows = len(prompt_groups)
+        fig_height = max(6.0, num_rows * 0.65 + 3.5)
+        fig_width = max(14.0, group_size * 0.7 + 9.0)
+
+        fig = plt.figure(figsize=(fig_width, fig_height), constrained_layout=True)
+        grid = fig.add_gridspec(
+            2,
+            3,
+            width_ratios=[3.0, 2.0, 2.0],
+            height_ratios=[2.2, 1.3],
+            wspace=0.3,
+            hspace=0.35,
+        )
+        ax_heat = fig.add_subplot(grid[:, 0])
+        ax_std = fig.add_subplot(grid[0, 1])
+        ax_violin = fig.add_subplot(grid[1, 1])
+        ax_ecdf = fig.add_subplot(grid[0, 2])
+        ax_kurt = fig.add_subplot(grid[1, 2])
+
+        im = ax_heat.imshow(
+            heatmap_data,
+            aspect="auto",
+            cmap="coolwarm",
+            vmin=data_min,
+            vmax=data_max,
+        )
+        ax_heat.set_xticks(range(group_size))
+        ax_heat.set_xticklabels([f"A{i+1}" for i in range(group_size)], rotation=45, ha="right")
+        ax_heat.set_yticks(range(num_rows))
+        ax_heat.set_yticklabels([entry["prompt"] for entry in prompt_groups], fontsize=8)
+        ax_heat.set_xlabel("Completion Index")
+        ax_heat.set_title(f"{metric_label} Distribution (step {step})")
+        cbar = fig.colorbar(im, ax=ax_heat, pad=0.015)
+        cbar.set_label(metric_label, rotation=270, labelpad=15)
+
+        std_values = [entry["std"] for entry in prompt_groups]
+        ax_std.barh(range(num_rows), std_values, color="#1f77b4")
+        ax_std.set_yticks(range(num_rows))
+        ax_std.set_yticklabels([])
+        ax_std.set_xlabel("Std Dev")
+        ax_std.grid(axis="x", linestyle=":", alpha=0.4)
+        for idx, value in enumerate(std_values):
+            ax_std.text(value, idx, f"{value:.3f}", va="center", ha="left", fontsize=8)
+        ax_std.set_title("Intra-prompt std")
+
+        violin_values: list[np.ndarray] = []
+        violin_positions: list[int] = []
+        for idx in range(group_size):
+            column = heatmap_data[:, idx]
+            finite_column = column[np.isfinite(column)]
+            if finite_column.size == 0:
+                continue
+            violin_values.append(finite_column)
+            violin_positions.append(idx + 1)
+        if violin_values:
+            parts = ax_violin.violinplot(
+                violin_values,
+                positions=violin_positions,
+                showmeans=True,
+                showextrema=False,
+                widths=0.9,
+            )
+            for body in parts["bodies"]:
+                body.set_facecolor("#9467bd")
+                body.set_edgecolor("#4b3069")
+                body.set_alpha(0.5)
+            if "cmeans" in parts:
+                parts["cmeans"].set_color("#4b3069")
+            ax_violin.set_xticks(violin_positions)
+            ax_violin.set_xticklabels([f"A{i}" for i in violin_positions])
+        else:
+            ax_violin.text(0.5, 0.5, "No finite values", transform=ax_violin.transAxes, ha="center", va="center")
+            ax_violin.set_xticks([])
+        ax_violin.set_ylabel(metric_label)
+        ax_violin.set_title("Per-completion violin", fontsize=10)
+        ax_violin.grid(axis="y", linestyle=":", alpha=0.4)
+
+        flattened = heatmap_data[np.isfinite(heatmap_data)]
+        if flattened.size > 0:
+            sorted_vals = np.sort(flattened)
+            y_vals = np.linspace(1 / sorted_vals.size, 1.0, sorted_vals.size)
+            ax_ecdf.plot(sorted_vals, y_vals, color="#2ca02c")
+            mean_all = float(sorted_vals.mean())
+            std_all = float(sorted_vals.std())
+            median_all = float(np.median(sorted_vals))
+            ax_ecdf.axvline(mean_all, color="#d62728", linestyle="--", linewidth=1, label="mean")
+            ax_ecdf.axvline(median_all, color="#1f77b4", linestyle=":", linewidth=1, label="median")
+            ax_ecdf.legend(fontsize=8, loc="lower right")
+            ax_ecdf.text(
+                0.05,
+                0.05,
+                f"std={std_all:.3f}",
+                transform=ax_ecdf.transAxes,
+                fontsize=8,
+                bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none"},
+            )
+        else:
+            ax_ecdf.text(0.5, 0.5, "No data", transform=ax_ecdf.transAxes, ha="center", va="center")
+        ax_ecdf.set_title("ECDF (all completions)", fontsize=10)
+        ax_ecdf.set_xlabel(metric_label)
+        ax_ecdf.set_ylabel("CDF")
+        ax_ecdf.grid(alpha=0.4, linestyle=":")
+
+        kurt_values = [entry.get("kurtosis", float("nan")) for entry in prompt_groups]
+        kurt_plot = [value if math.isfinite(value) else 0.0 for value in kurt_values]
+        ax_kurt.barh(range(num_rows), kurt_plot, color="#ff7f0e")
+        ax_kurt.set_yticks(range(num_rows))
+        ax_kurt.set_yticklabels([])
+        ax_kurt.set_xlabel("Kurtosis")
+        ax_kurt.grid(axis="x", linestyle=":", alpha=0.4)
+        for idx, value in enumerate(kurt_values):
+            label = f"{value:.2f}" if math.isfinite(value) else "n/a"
+            ax_kurt.text(kurt_plot[idx], idx, label, va="center", ha="left", fontsize=8)
+        ax_kurt.set_title("Kurtosis (sharpness)", fontsize=10)
+
+        plot_dir = self._kl_plot_dir
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_path = plot_dir / f"{file_prefix}_step_{step:06d}.png"
+        fig.savefig(plot_path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        self.accelerator.print(f"[KL plot] Saved {metric_label} heatmap to {plot_path}")
+
+    @staticmethod
+    def _format_prompt_label(prompt: Any, max_chars: int = 80) -> str:
+        """Collapse whitespace and clip prompt text for plotting labels."""
+        text = str(prompt).replace("\n", " ")
+        text = " ".join(text.split())
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3] + "..."
 
     def create_model_card(
         self,

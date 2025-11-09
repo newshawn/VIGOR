@@ -13,7 +13,7 @@ export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_MODE=offline
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0,1
 # export CUDA_VISIBLE_DEVICES=3
 # 设置中国时区
 # export TZ='Asia/Shanghai'
@@ -31,7 +31,7 @@ if [ "$MODE" = "debug" ]; then
     # 单卡调试：沿用 CUDA_VISIBLE_DEVICES（默认0），小 batch，小步数，并强制关闭 vLLM
     CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
     NUM_PROCESSES=1
-    BATCH_SIZE=3
+    BATCH_SIZE=6
     GRAD_ACCUM=1
     lr=3.0e-06
     num_generations=3

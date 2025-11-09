@@ -126,6 +126,24 @@ class GRPOConfig(trl.GRPOConfig):
         default=None,
         metadata={"help": ("The group to store runs under.")},
     )
+    kl_reward_plot_enabled: bool = field(
+        default=True,
+        metadata={
+            "help": "When true, save per-step KL reward distribution plots to the run directory (output_dir)."
+        },
+    )
+    kl_reward_plot_every_n_steps: int = field(
+        default=5,
+        metadata={
+            "help": "Plot frequency in steps when KL reward plotting is enabled. Use 1 to export every logging step."
+        },
+    )
+    kl_reward_plot_max_prompts: int = field(
+        default=30,
+        metadata={
+            "help": "Maximum number of prompt groups to visualize per KL reward plot (sorted by standard deviation)."
+        },
+    )
 
 
 @dataclass

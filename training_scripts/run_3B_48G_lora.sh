@@ -15,7 +15,7 @@ export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # 设置中国时区
 # export TZ='Asia/Shanghai'
-num_generations=8 # 作者使用7，但是3卡时候用7会犯错
+num_generations=4 # 作者使用7，但是3卡时候用7会犯错
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
