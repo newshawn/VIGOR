@@ -213,6 +213,37 @@ def nanstd(tensor: torch.Tensor) -> torch.Tensor:
     return torch.sqrt(variance)
 
 
+def normalize_per_prompt(values: torch.Tensor, group_size: int, eps: float = 1e-12) -> torch.Tensor:
+    """
+    Apply row-wise min-max normalization over flattened prompt groups.
+
+    Args:
+        values: Tensor shaped (num_prompts * group_size,)
+        group_size: Number of completions per prompt.
+    """
+    if group_size <= 0 or values.numel() == 0 or values.numel() % group_size != 0:
+        return values
+
+    matrix = values.view(-1, group_size)
+    row_min = matrix.min(dim=1, keepdim=True).values
+    row_max = matrix.max(dim=1, keepdim=True).values
+    row_span = row_max - row_min
+
+    normalized = torch.zeros_like(matrix)
+    stable_rows = (row_span >= eps).squeeze(1)
+    if stable_rows.any():
+        normalized_subset = (matrix[stable_rows] - row_min[stable_rows]) / row_span[stable_rows]
+        normalized[stable_rows] = normalized_subset
+
+    degenerate_rows = (~stable_rows).nonzero(as_tuple=True)[0]
+    if degenerate_rows.numel() > 0:
+        argmax_idx = matrix[degenerate_rows].argmax(dim=1)
+        normalized[degenerate_rows, :] = 0.0
+        normalized[degenerate_rows, argmax_idx] = 1.0
+
+    return normalized.view_as(values)
+
+
 def split_tensor_dict(
     tensor_dict: dict[str, Optional[torch.Tensor]], num_chunks: int
 ) -> list[dict[str, Optional[torch.Tensor]]]:
@@ -1489,7 +1520,7 @@ class INTUITORTrainer(Trainer):
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
-        gathered_kl_rewards = gather(kl_rewards)    # 将所有gpu的kl_reward聚集到一起
+        gathered_kl_rewards = gather(kl_rewards).reshape(-1)    # 将所有gpu的kl_reward聚集到一起
         kl_rewards_for_logging = gathered_kl_rewards.detach().cpu().tolist()
         if ref_logprob_rewards is not None:
             gathered_ref_rewards = gather(ref_logprob_rewards)
@@ -1507,20 +1538,11 @@ class INTUITORTrainer(Trainer):
             semantic_mask_all = gather(semantic_mask_local).to(device=device)
         else:
             semantic_mask_all = None
-        # === 新增：全局 min-max 归一化，将 KL 奖励映射到 [0, 1] ===
-        kl_min = gathered_kl_rewards.min()
-        kl_max = gathered_kl_rewards.max()
-        if (kl_max - kl_min) < 1e-12:
-            # 退化情形：全体样本几乎一样，为了保证 max=1 / min=0，手动拉开
-            kl_rewards = torch.zeros_like(kl_rewards)
-            gathered_kl_rewards = torch.zeros_like(gathered_kl_rewards)
-            kl_rewards[gathered_kl_rewards.argmax()] = 1.0
-            gathered_kl_rewards[gathered_kl_rewards.argmax()] = 1.0
-        else:
-            kl_rewards = (kl_rewards - kl_min) / (kl_max - kl_min)
-            gathered_kl_rewards = (gathered_kl_rewards - kl_min) / (kl_max - kl_min)
+        # === Prompt-wise min-max normalization，将每个 prompt 的奖励映射到 [0, 1] ===
+        kl_rewards_norm_flat = normalize_per_prompt(gathered_kl_rewards, self.num_generations)
+        gathered_kl_rewards = kl_rewards_norm_flat
         # 保存归一化后的 KL 奖励用于文本日志
-        kl_rewards_norm_for_logging = gathered_kl_rewards.detach().cpu().tolist()
+        kl_rewards_norm_for_logging = kl_rewards_norm_flat.detach().cpu().tolist()
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
@@ -1547,6 +1569,7 @@ class INTUITORTrainer(Trainer):
             self.accelerator.process_index * len(prompts),
             (self.accelerator.process_index + 1) * len(prompts),
         )
+        kl_rewards = kl_rewards_norm_flat[process_slice]
         # Save a copy of reward-based advantages for logging before slicing to local partition
         reward_advantages_all = advantages.detach().clone()
         advantages = advantages[process_slice]
