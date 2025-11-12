@@ -1650,8 +1650,8 @@ class INTUITORTrainer(Trainer):
         total_advantage = kl_advantage + advantages + ref_advantage + tail_repeat_advantage
         if semantic_mask_local_slice is not None:
             total_advantage = total_advantage * semantic_mask_local_slice
-        if self.accelerator.process_index == 0:  # 或其它 rank
-            import pdb; pdb.set_trace()
+        # if self.accelerator.process_index == 0:  # 或其它 rank
+        #     import pdb; pdb.set_trace()
         # Log the metrics
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
@@ -1730,7 +1730,7 @@ class INTUITORTrainer(Trainer):
                 self._kl_plot_buffer["ref_reward"].extend(ref_rewards_for_logging)
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
-        self._textual_logs["rewards"]["kl_reward"].extend(kl_rewards_for_logging)
+        # self._textual_logs["rewards"]["kl_reward"].extend(kl_rewards_for_logging)
 
 
         # 记录 KL/Total 的优势项到 textual_logs（全局对齐，支持多卡）：
@@ -1750,20 +1750,16 @@ class INTUITORTrainer(Trainer):
             total_advantages_all = total_advantages_all + tail_repeat_advantages_all
         if semantic_mask_all is not None:
             total_advantages_all = total_advantages_all * semantic_mask_all
-        # 放入 advantages 命名空间，便于控制台分组打印与 wandb 独立列
-        # self._textual_logs["advantages"]["kl"].extend(kl_advantages_all.detach().cpu().tolist())
-        # self._textual_logs["advantages"]["total"].extend(total_advantages_all.detach().cpu().tolist())
-        # # 同时放入 rewards 命名空间，便于与其它 reward 列并列查看（wandb 会通过 **rewards 展开为列）
-        self._textual_logs["rewards"]["kl_advantage"].extend(kl_advantages_all.detach().cpu().tolist())
-        if ref_advantages_all is not None:
-            self._textual_logs["rewards"]["ref_logprob_advantage"].extend(
-                ref_advantages_all.detach().cpu().tolist()
-            )
-        if tail_repeat_advantages_all is not None:
-            self._textual_logs["rewards"]["tail_repeat_advantage"].extend(
-                tail_repeat_advantages_all.detach().cpu().tolist()
-            )
-        self._textual_logs["rewards"]["total_advantage"].extend(total_advantages_all.detach().cpu().tolist())
+        # self._textual_logs["rewards"]["kl_advantage"].extend(kl_advantages_all.detach().cpu().tolist())
+        # if ref_advantages_all is not None:
+        #     self._textual_logs["rewards"]["ref_logprob_advantage"].extend(
+        #         ref_advantages_all.detach().cpu().tolist()
+        #     )
+        # if tail_repeat_advantages_all is not None:
+        #     self._textual_logs["rewards"]["tail_repeat_advantage"].extend(
+        #         tail_repeat_advantages_all.detach().cpu().tolist()
+        #     )
+        # self._textual_logs["rewards"]["total_advantage"].extend(total_advantages_all.detach().cpu().tolist())
 
         return {
             "prompt_ids": prompt_ids,
