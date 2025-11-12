@@ -19,6 +19,7 @@ num_generations=8 # 作者使用7，但是3卡时候用7会犯错
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
+SAVE_TOTAL_LIMIT=16 # 控制最多保留的 checkpoint 数量
 
 # GPU 分配策略
 # - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
@@ -46,12 +47,14 @@ if [ "$EXP_TYPE" = "grpo" ]; then
     WANDB_PROJECT="open-r1-grpo"
     RUN_NAME="Qwen2.5-GRPO-3B"
     LOG_PREFIX="grpo"
+    BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-GRPO-3B"
 else
     SCRIPT_PATH="src/open_r1/intuitor.py"
     CONFIG_FILE="recipes/Qwen2.5-3B/intuitor/config_demo_lora.yaml"     
     WANDB_PROJECT="open-r1-intuitor"
     RUN_NAME="Qwen2.5-Intuitor-3B"
     LOG_PREFIX="intuitor"
+    BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B"
 fi
 
 
@@ -62,9 +65,8 @@ LOG_DIR="logs/${LOG_PREFIX}_${NUM_PROCESSES}_3B/${TIMESTAMP}"
 mkdir -p "$LOG_DIR"
 
 # 模型 checkpoint 输出目录（带时间戳，避免覆盖）
-BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B"
-# OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251104_084223"
 OUTPUT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
+# OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709"
 mkdir -p "$OUTPUT_DIR"
 
 # 显示当前配置参数
@@ -84,6 +86,7 @@ echo "LOG_DIR: $LOG_DIR"
 echo "num_generations: $num_generations"
 echo "OUTPUT_DIR: $OUTPUT_DIR"
 echo "START_VLLM: $START_VLLM"
+echo "SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT"
 echo "========================"
 
 # 启动GPU监控（每5秒记录一次）
@@ -108,6 +111,7 @@ echo "LOG_DIR: $LOG_DIR" >> "$PARAM_LOG"
 echo "num_generations: $num_generations" >> "$PARAM_LOG"
 echo "OUTPUT_DIR: $OUTPUT_DIR" >> "$PARAM_LOG"
 echo "START_VLLM: $START_VLLM" >> "$PARAM_LOG"
+echo "SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT" >> "$PARAM_LOG"
 
 
 # 启动 vLLM（可选）
@@ -134,7 +138,7 @@ nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     $SCRIPT_PATH \
     --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
-    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME $EXTRA_ARGS > "${LOG_DIR}/run_${LOG_PREFIX}.log" 2>&1 &
+    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT $EXTRA_ARGS > "${LOG_DIR}/run_${LOG_PREFIX}.log" 2>&1 &
 TRAINING_PID=$!
 wait $TRAINING_PID
 echo "Training process started with PID: $TRAINING_PID"

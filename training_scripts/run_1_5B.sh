@@ -28,9 +28,13 @@ MAX_STEPS=-1        # 可选 -1 或者具体步数
 
 # 根据模式/进程数设置 CUDA 设备与 batch 参数
 if [ "$MODE" = "debug" ]; then
-    # 单卡调试：沿用 CUDA_VISIBLE_DEVICES（默认0），小 batch，小步数，并强制关闭 vLLM
+    # 调试：沿用 CUDA_VISIBLE_DEVICES（默认0），自动推断使用的 GPU 数量
     CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
-    NUM_PROCESSES=1
+    IFS=',' read -r -a __DEV_ARR <<< "$CUDA_DEVICES"
+    NUM_PROCESSES="${#__DEV_ARR[@]}"
+    if [ "$NUM_PROCESSES" -le 0 ]; then
+        NUM_PROCESSES=1
+    fi
     BATCH_SIZE=6
     GRAD_ACCUM=1
     lr=3.0e-06
@@ -184,10 +188,11 @@ fi
 
 # 启动训练脚本：debug 模式不加载 zero3 配置；train 模式使用 zero3 配置
 if [ "$MODE" = "debug" ]; then
-  echo "[DEBUG] 直接以 python 前台运行，便于 pdb 调试（不使用 accelerate）"
-  echo "Command: CUDA_VISIBLE_DEVICES=$CUDA_DEVICES python -u $SCRIPT_PATH ..."
+  echo "[DEBUG] 通过 accelerate launch 前台启动，便于多卡 pdb/print 调试"
+  echo "Command: CUDA_VISIBLE_DEVICES=$CUDA_DEVICES accelerate launch --num_processes $NUM_PROCESSES --multi_gpu $SCRIPT_PATH ..."
   env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
-    python -u "$SCRIPT_PATH" \
+    accelerate launch --num_processes "$NUM_PROCESSES" --multi_gpu \
+    "$SCRIPT_PATH" \
       --per_device_eval_batch_size "$BATCH_SIZE" \
       --per_device_train_batch_size "$BATCH_SIZE" \
       --gradient_accumulation_steps "$GRAD_ACCUM" \
@@ -199,7 +204,6 @@ if [ "$MODE" = "debug" ]; then
       --wandb_project "$WANDB_PROJECT" \
       --run_name "$RUN_NAME" \
       $EXTRA_ARGS
-  TRAINING_PID=$!
 else
   nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
       accelerate launch --config_file recipes/accelerate_configs/zero3.yaml --num_processes=$NUM_PROCESSES \

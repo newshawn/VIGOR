@@ -1355,7 +1355,6 @@ class INTUITORTrainer(Trainer):
         kl_rewards = self._compute_gradient_kl_reward(
             self.model, prompt_ids, prompt_mask, completion_ids, completion_mask
         ).detach()
-        # import pdb; pdb.set_trace()
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
@@ -1403,7 +1402,7 @@ class INTUITORTrainer(Trainer):
 
         semantic_filter_mask: Optional[torch.Tensor] = None
         semantic_filter_stats: Optional[dict[str, torch.Tensor]] = None
-        # 计算当前组内的相似度，判断是否需要过滤
+        # === 计算当前组内的相似度，判断是否需要过滤 ===
         if self.semantic_similarity_filter_enabled and len(prompts) % self.num_generations == 0:
             embeddings = None
             valid_mask = None
@@ -1458,9 +1457,8 @@ class INTUITORTrainer(Trainer):
             self.accelerator.wait_for_everyone()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-
+        # === 逐个 reward func 打分：统一收集模块化模型输出与自定义 callable 返回值，reward_func=accuracy 但是 weights=0 ===
         rewards_per_func = torch.zeros(len(prompts), max(len(self.reward_funcs),1), device=device)
-        # intuitor里面的reward_func=accuracy 但是 weights=0
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
         ):
@@ -1488,6 +1486,7 @@ class INTUITORTrainer(Trainer):
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
 
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+        # === 计算得到 semantic_mask_local，别的不管 ===
         semantic_mask_local = None
         if semantic_filter_mask is not None:
             mask = semantic_filter_mask.to(device=device)
@@ -1496,10 +1495,10 @@ class INTUITORTrainer(Trainer):
         filtered_group_ratio = None
         mean_similarity_stats = None
         if semantic_filter_stats is not None:
-            group_filter = semantic_filter_stats["group_filter"]
-            total_groups = group_filter.numel()
-            filtered_groups = (~group_filter).sum().float()
-            filtered_group_ratio = (filtered_groups, torch.tensor(float(total_groups), device=device))
+            group_filter = semantic_filter_stats["group_filter"]    # bool, shape=[num_prompt]
+            total_groups = group_filter.numel()                     # int
+            filtered_groups = (~group_filter).sum().float()         # float，被过滤的组
+            filtered_group_ratio = (filtered_groups, torch.tensor(float(total_groups), device=device))  # 被过滤的组占比
             valid_means = semantic_filter_stats["group_mean_similarity"][~torch.isnan(
                 semantic_filter_stats["group_mean_similarity"]
             )]
@@ -1517,11 +1516,10 @@ class INTUITORTrainer(Trainer):
                 "Please ensure that at least one reward function returns a valid reward."
             )
 
-        # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
-        # completions may be distributed across processes
+        # === 多卡同步：收集各类奖励/掩码，后续统一做归一化与日志记录 ===
         rewards_per_func = gather(rewards_per_func)
-        gathered_kl_rewards = gather(kl_rewards).reshape(-1)    # 将所有gpu的kl_reward聚集到一起
-        kl_rewards_for_logging = gathered_kl_rewards.detach().cpu().tolist()
+        gathered_kl_rewards_raw = gather(kl_rewards).reshape(-1)    # 将所有gpu的kl_reward聚集到一起，例如单卡kl_rewards.shape=[6]，那么gathered_kl_rewards.shape=[12]
+        kl_rewards_for_logging = gathered_kl_rewards_raw.detach().cpu().tolist()
         if ref_logprob_rewards is not None:
             gathered_ref_rewards = gather(ref_logprob_rewards)
             ref_rewards_for_logging = gathered_ref_rewards.detach().cpu().tolist()
@@ -1539,19 +1537,22 @@ class INTUITORTrainer(Trainer):
         else:
             semantic_mask_all = None
         # === Prompt-wise min-max normalization，将每个 prompt 的奖励映射到 [0, 1] ===
-        kl_rewards_norm_flat = normalize_per_prompt(gathered_kl_rewards, self.num_generations)
+        raw_kl_rewards_by_prompt = gathered_kl_rewards_raw.view(-1, self.num_generations)
+        raw_mean_kl_rewards = raw_kl_rewards_by_prompt.mean(dim=1)
+        raw_std_kl_rewards = raw_kl_rewards_by_prompt.std(dim=1)
+        raw_kl_reward_record = raw_mean_kl_rewards.mean().item()
+        raw_kl_reward_std_record = raw_std_kl_rewards.mean().item()
+
+        kl_rewards_norm_flat = normalize_per_prompt(gathered_kl_rewards_raw, self.num_generations)  # shape=[num_prompt*num_generations*num_device]
         gathered_kl_rewards = kl_rewards_norm_flat
-        # 保存归一化后的 KL 奖励用于文本日志
-        kl_rewards_norm_for_logging = kl_rewards_norm_flat.detach().cpu().tolist()
-        # Apply weights to each reward function's output and sum
+        kl_rewards_norm_for_logging = kl_rewards_norm_flat.detach().cpu().tolist() # 保存归一化后的 KL 奖励用于文本日志
+        # === 任务奖励聚合与优势计算（这里只有accuracy_reward，weight=0，不用于优化） ===    
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
-        # Compute grouped-wise rewards
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)   # Compute grouped-wise rewards
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
 
-        # if reward_weights is not all zero, normalize them to get the advantages, otherwise set advantage to 0
-        if torch.any(self.reward_weights != 0) and len(self.reward_funcs) > 0:
+        if torch.any(self.reward_weights != 0) and len(self.reward_funcs) > 0:  # if reward_weights is not all zero, normalize them to get the advantages, otherwise set advantage to 0
             warnings.warn("Combining specified rewards together with KL-based advantage.")
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
             std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
@@ -1561,22 +1562,19 @@ class INTUITORTrainer(Trainer):
         else:
             advantages = torch.zeros_like(rewards)
 
-        if semantic_mask_all is not None:
-            advantages = advantages * semantic_mask_all
-
-        # Slice to keep only the local part of the data
+        # === 只保留当前 rank 对应的数据片段 ===
         process_slice = slice(
             self.accelerator.process_index * len(prompts),
             (self.accelerator.process_index + 1) * len(prompts),
         )
-        kl_rewards = kl_rewards_norm_flat[process_slice]
-        # Save a copy of reward-based advantages for logging before slicing to local partition
-        reward_advantages_all = advantages.detach().clone()
+        reward_advantages_all = advantages.detach().clone() # 在切片前先备份 reward 端优势，方便后续做全局日志
         advantages = advantages[process_slice]
+        # === 语义相似度过滤：语义相似度在范围之外的prompt，通过mask，将其advantage设置为0，不参与损失计算 ===
         if semantic_mask_all is not None:
             semantic_mask_local_slice = semantic_mask_all[process_slice]
         else:
             semantic_mask_local_slice = None
+        # === Reference rewards：按 prompt 组统计并换算为优势 ===
         ref_reward_record = None
         ref_reward_std_record = None
         if gathered_ref_rewards is not None:
@@ -1599,7 +1597,8 @@ class INTUITORTrainer(Trainer):
         else:
             ref_advantage = torch.zeros_like(kl_rewards)
             ref_advantages_all = torch.zeros_like(reward_advantages_all)
-        # import pdb; pdb.set_trace()
+
+        # === Tail-repeat rewards：检测重复片段并生成奖励分布 ===
         tail_repeat_reward_record = None
         tail_repeat_reward_std_record = None
         if gathered_tail_repeat_rewards is not None:
@@ -1624,25 +1623,25 @@ class INTUITORTrainer(Trainer):
             tail_repeat_advantage = torch.zeros_like(kl_rewards)
             tail_repeat_advantages_all = torch.zeros_like(reward_advantages_all)
 
-        gathered_kl_rewards = gathered_kl_rewards.view(-1, self.num_generations)    # (prompt_group, num_generations)
-        mean_kl_rewards = gathered_kl_rewards.mean(dim=1)   # (prompt_group,) 每个 prompt 小组内部做均值
+        # === KL rewards：将gathered_kl_rewards按照prompt划分，计算组内mean和std，便于计算优势 ===
+        gathered_kl_rewards = gathered_kl_rewards.view(-1, self.num_generations)    # (num_prompt, num_generations)
+        mean_kl_rewards = gathered_kl_rewards.mean(dim=1)   # (num_prompt) 每个 prompt 小组内部做均值
         std_kl_rewards = gathered_kl_rewards.std(dim=1)
 
-        kl_reward_record = mean_kl_rewards.mean().item()    # 计算所有 prompt 组的平均 KL 奖励
+        kl_reward_record = mean_kl_rewards.mean().item()    # 计算所有 prompt 组的平均 KL 奖励 shape=[1]
         kl_reward_std_record = std_kl_rewards.mean().item()    # 计算所有 prompt 组的平均 KL 奖励标准差
-        # 会将每个元素重复 num_generations 次。如果 mean_kl_rewards = [0.5, 0.3, 0.8] 且 num_generations = 4，结果将是 [0.5, 0.5, 0.5, 0.5, 0.3, 0.3, 0.3, 0.3, 0.8, 0.8, 0.8, 0.8]
-        mean_kl_rewards = mean_kl_rewards.repeat_interleave(self.num_generations, dim=0)
+        mean_kl_rewards = mean_kl_rewards.repeat_interleave(self.num_generations, dim=0) # 会将每个元素重复 num_generations 次（num_prompt*num_generations）。如果 mean_kl_rewards = [0.5, 0.3, 0.8] 且 num_generations = 4，结果将是 [0.5, 0.5, 0.5, 0.5, 0.3, 0.3, 0.3, 0.3, 0.8, 0.8, 0.8, 0.8]
         std_kl_rewards = std_kl_rewards.repeat_interleave(self.num_generations, dim=0)
 
-        # Keep full vectors for logging
+        # === 记录当前 step 的 kl_reward的mean和std ===
         mean_kl_rewards_all = mean_kl_rewards.detach().clone()
         std_kl_rewards_all = std_kl_rewards.detach().clone()
 
-        # Local slices for loss computation
+        # === process_slice 获取当前 gpu 上的样本索引范围，计算当前 gpu 的 advantages ===
+        kl_rewards = kl_rewards_norm_flat[process_slice]    # kl_rewards_norm_flat是归一化之后的shape=[num_prompt*num_generation]，使用[process_slice]切出当前gpu的部分，用于计算优势
         mean_kl_rewards = mean_kl_rewards[process_slice]
         std_kl_rewards = std_kl_rewards[process_slice]
-        # 逐个元素相减，计算 KL 奖励的优势
-        kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)
+        kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)        # 逐个元素相减，计算 KL 奖励的优势
         if semantic_mask_local_slice is not None:
             advantages = advantages * semantic_mask_local_slice
             kl_advantage = kl_advantage * semantic_mask_local_slice
@@ -1651,7 +1650,8 @@ class INTUITORTrainer(Trainer):
         total_advantage = kl_advantage + advantages + ref_advantage + tail_repeat_advantage
         if semantic_mask_local_slice is not None:
             total_advantage = total_advantage * semantic_mask_local_slice
-        # import pdb; pdb.set_trace()
+        if self.accelerator.process_index == 0:  # 或其它 rank
+            import pdb; pdb.set_trace()
         # Log the metrics
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
@@ -1699,6 +1699,8 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
         self._metrics[mode]["rewards/kl_reward/mean"].append(kl_reward_record)
         self._metrics[mode]["rewards/kl_reward/std"].append(kl_reward_std_record)
+        self._metrics[mode]["rewards/kl_reward_raw/mean"].append(raw_kl_reward_record)
+        self._metrics[mode]["rewards/kl_reward_raw/std"].append(raw_kl_reward_std_record)
         if ref_reward_record is not None:
             self._metrics[mode]["rewards/ref_logprob/mean"].append(ref_reward_record)
             self._metrics[mode]["rewards/ref_logprob/std"].append(ref_reward_std_record)
@@ -1706,16 +1708,16 @@ class INTUITORTrainer(Trainer):
             self._metrics[mode]["rewards/tail_repeat/mean"].append(tail_repeat_reward_record)
             self._metrics[mode]["rewards/tail_repeat/std"].append(tail_repeat_reward_std_record)
         # 监测 kl 的 advantage的平均值，为0才正常
-        self._metrics[mode]["advantages/kl_mean"].append(self.accelerator.gather_for_metrics(kl_advantage).nanmean().item())
+        self._metrics[mode]["advantages/kl_mean_advantage"].append(self.accelerator.gather_for_metrics(kl_advantage).nanmean().item())
         if gathered_ref_rewards is not None:
-            self._metrics[mode]["advantages/ref_mean"].append(
+            self._metrics[mode]["advantages/ref_mean_advantage"].append(
                 self.accelerator.gather_for_metrics(ref_advantage).nanmean().item()
             )
         if gathered_tail_repeat_rewards is not None:
-            self._metrics[mode]["advantages/tail_repeat_mean"].append(
+            self._metrics[mode]["advantages/tail_repeat_mean_advantage"].append(
                 self.accelerator.gather_for_metrics(tail_repeat_advantage).nanmean().item()
             )
-        self._metrics[mode]["advantages/total_mean"].append(self.accelerator.gather_for_metrics(total_advantage).nanmean().item())
+        self._metrics[mode]["advantages/total_mean_advantage"].append(self.accelerator.gather_for_metrics(total_advantage).nanmean().item())
         # Log prompt and completion texts
         gathered_prompts = gather_object(prompts_text)
         gathered_completions = gather_object(completions_text)
@@ -1729,12 +1731,7 @@ class INTUITORTrainer(Trainer):
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._textual_logs["rewards"]["kl_reward"].extend(kl_rewards_for_logging)
-        # 追加记录归一化后的 KL 奖励（范围约为 [0,1]）
-        self._textual_logs["rewards"]["kl_reward_norm"].extend(kl_rewards_norm_for_logging)
-        if ref_rewards_for_logging is not None:
-            self._textual_logs["rewards"]["ref_logprob_reward"].extend(ref_rewards_for_logging)
-        if tail_repeat_rewards_for_logging is not None:
-            self._textual_logs["rewards"]["tail_repeat_reward"].extend(tail_repeat_rewards_for_logging)
+
 
         # 记录 KL/Total 的优势项到 textual_logs（全局对齐，支持多卡）：
         # 使用 gather 后的全局 KL 奖励与对应均值/方差，得到每个 completion 的 KL 优势
