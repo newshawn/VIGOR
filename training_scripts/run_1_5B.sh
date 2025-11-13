@@ -7,114 +7,105 @@ cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 # unset https_proxy
 # clash on
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
-export PATH=/usr/local/cuda-12.4/bin:${PATH} 
+export PATH=/usr/local/cuda-12.4/bin:${PATH}
 export CUDA_HOME=/usr/local/cuda-12.4
 export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
-export WANDB_MODE=offline
+export WANDB_MODE=online
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export CUDA_VISIBLE_DEVICES=0,1
-# export CUDA_VISIBLE_DEVICES=3
 # 设置中国时区
 # export TZ='Asia/Shanghai'
-## 手动切换模式（只需改这里）
-MODE=debug        # train | debug
-START_VLLM=true   # 是否启动 vLLM（debug 下会强制关闭）
 
-num_generations=7   # 作者使用7，但是3卡时候用7会犯错
-NUM_PROCESSES=8     # 训练时的并行进程数（train 模式使用）
-EXP_TYPE=intuitor    # 可选值: intuitor 或 grpo
-MAX_STEPS=-1        # 可选 -1 或者具体步数
+# === 手动/环境可配置的续跑参数（默认关闭） ===
+# export RESUME_MODE=false
+export RESUME_MODE=true
+export RESUME_TIMESTAMP=20251113_073223
+export WANDB_RUN_ID=ihmq57k3
 
-# 根据模式/进程数设置 CUDA 设备与 batch 参数
-if [ "$MODE" = "debug" ]; then
-    # 调试：沿用 CUDA_VISIBLE_DEVICES（默认0），自动推断使用的 GPU 数量
-    CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
-    IFS=',' read -r -a __DEV_ARR <<< "$CUDA_DEVICES"
-    NUM_PROCESSES="${#__DEV_ARR[@]}"
-    if [ "$NUM_PROCESSES" -le 0 ]; then
-        NUM_PROCESSES=1
+START_VLLM=true   # 是否使用单独的 vLLM 进程
+NUM_PROCESSES=4   # 仅支持 4 或 8（会结合 START_VLLM 自动调整）
+EXP_TYPE=intuitor
+MAX_STEPS=-1
+num_generations=7
+SAVE_TOTAL_LIMIT=10
+
+# GPU 分配策略（与此前 train 分支一致）
+REQUESTED_PROCESSES=$NUM_PROCESSES
+if [ "$NUM_PROCESSES" -eq 8 ]; then
+    if [ "$START_VLLM" = true ]; then
+        CUDA_DEVICES="1,2,3,4,5,6,7"
+        num_generations=7
+        NUM_PROCESSES=7  # 预留 GPU0 给 vLLM
+    else
+        CUDA_DEVICES="0,1,2,3,4,5,6,7"
+        num_generations=8
     fi
-    BATCH_SIZE=6
+    BATCH_SIZE=3
+    GRAD_ACCUM=32
+    lr=3.0e-06
+elif [ "$NUM_PROCESSES" -eq 4 ]; then
+    if [ "$START_VLLM" = true ]; then
+        CUDA_DEVICES="1,2,3"
+        num_generations=3
+        NUM_PROCESSES=3  # 预留 GPU0 给 vLLM
+    else
+        CUDA_DEVICES="0,1,2,3"
+    fi
+    BATCH_SIZE=3
     GRAD_ACCUM=1
     lr=3.0e-06
-    num_generations=3
-    START_VLLM=false
-    # 彻底关闭 wandb（即使 YAML 里有 report_to: wandb）
-    export WANDB_DISABLED=true
-    if [ "$MAX_STEPS" = "-1" ]; then
-        MAX_STEPS=50
-    fi
 else
-    # 目前仅使用4090，仅支持 8卡 或 4卡 训练
-    REQUESTED_PROCESSES=$NUM_PROCESSES
-    if [ "$NUM_PROCESSES" -eq 8 ]; then
-        if [ "$START_VLLM" = true ]; then
-            CUDA_DEVICES="1,2,3,4,5,6,7"
-            num_generations=7
-            NUM_PROCESSES=7  # 预留 GPU0 给 vLLM
-        else
-            CUDA_DEVICES="0,1,2,3,4,5,6,7"
-            num_generations=8
-        fi
-        BATCH_SIZE=3
-        GRAD_ACCUM=32
-        lr=3.0e-06
-    elif [ "$NUM_PROCESSES" -eq 4 ]; then
-        if [ "$START_VLLM" = true ]; then
-            CUDA_DEVICES="1,2,3"
-            NUM_PROCESSES=3  # 预留 GPU0 给 vLLM
-        else
-            CUDA_DEVICES="0,1,2,3"
-        fi
-        BATCH_SIZE=2
-        GRAD_ACCUM=1
-        lr=3.0e-06
-    else
-        echo "[ERROR] 当前脚本仅支持 NUM_PROCESSES=4 或 8，实际为 ${NUM_PROCESSES}." >&2
-        exit 1
-    fi
+    echo "[ERROR] 当前脚本仅支持 NUM_PROCESSES=4 或 8，实际为 ${NUM_PROCESSES}." >&2
+    exit 1
+fi
 
-    if [ "$START_VLLM" = true ] && [ "$REQUESTED_PROCESSES" -ne "$NUM_PROCESSES" ]; then
-        echo "[INFO] vLLM 占用 1 张卡，训练进程数从 ${REQUESTED_PROCESSES} 调整为 ${NUM_PROCESSES}"
-    fi
+if [ "$START_VLLM" = true ] && [ "$REQUESTED_PROCESSES" -ne "$NUM_PROCESSES" ]; then
+    echo "[INFO] vLLM 占用 1 张卡，训练进程数从 ${REQUESTED_PROCESSES} 调整为 ${NUM_PROCESSES}"
 fi
 
 # 根据实验类型设置脚本和配置
 if [ "$EXP_TYPE" = "grpo" ]; then
     SCRIPT_PATH="src/open_r1/grpo.py"
     CONFIG_FILE="recipes/Qwen2.5-1.5B/grpo/config_demo.yaml"
-    WANDB_PROJECT="open-r1-grpo"
+    WANDB_PROJECT="open-r1-grpo_qwen2.5-1.5B"
     RUN_NAME="Qwen2.5-GRPO-1.5B"
     LOG_PREFIX="grpo"
 else
     SCRIPT_PATH="src/open_r1/intuitor.py"
     CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo.yaml"
-    WANDB_PROJECT="open-r1-intuitor"
+    WANDB_PROJECT="open-r1-intuitor-qwen2.5-1.5B"
     RUN_NAME="Qwen2.5-Intuitor-1.5B"
     LOG_PREFIX="intuitor"
 fi
-
-
-# 创建日志目录
-# TIMESTAMP=$(date -d "+8 hour" +"%Y%m%d_%H%M%S")
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-1.5B"
-if [ "$MODE" = "debug" ]; then
-    LOG_DIR="logs/${LOG_PREFIX}_${NUM_PROCESSES}_1.5B/debug"
-    OUTPUT_DIR="${BASE_OUTPUT_DIR}_debug"
+
+# 创建日志/输出目录
+if [ "$RESUME_MODE" = true ]; then
+    : "${RESUME_TIMESTAMP:?RESUME_MODE=true 但 RESUME_TIMESTAMP 未设置}"
+
+    PROJECT_DIR="${BASE_OUTPUT_DIR}_${RESUME_TIMESTAMP}"
+    LOG_DIR="${PROJECT_DIR}/logs"
+    OUTPUT_DIR="${PROJECT_DIR}/ckpt"
+    echo "[RESUME] 自动推导 PROJECT_DIR=$PROJECT_DIR"
+    echo "[RESUME] 自动推导 LOG_DIR=$LOG_DIR"
+    echo "[RESUME] 自动推导 OUTPUT_DIR=$OUTPUT_DIR"
 else
-    LOG_DIR="logs/${LOG_PREFIX}_${NUM_PROCESSES}_1.5B/${TIMESTAMP}"
-    OUTPUT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
+    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+    PROJECT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
+    LOG_DIR="${PROJECT_DIR}/logs"
+    OUTPUT_DIR="${PROJECT_DIR}/ckpt"
+    RUN_NAME="${RUN_NAME}_${TIMESTAMP}"
+fi
+if [ -n "$PROJECT_DIR" ]; then
+    mkdir -p "$PROJECT_DIR"
 fi
 mkdir -p "$LOG_DIR"
-
-# 模型 checkpoint 输出目录（train 用时间戳，debug 用固定后缀）
 mkdir -p "$OUTPUT_DIR"
+RUN_LOG_FILE="${LOG_DIR}/run_${LOG_PREFIX}.log"
+VLLM_LOG_FILE="${LOG_DIR}/vllm-server.log"
 
 # 显示当前配置参数
 echo "===== 当前配置参数 ====="
-echo "MODE: $MODE"
 echo "NUM_PROCESSES: $NUM_PROCESSES"
 echo "EXP_TYPE: $EXP_TYPE"
 echo "CUDA_DEVICES: $CUDA_DEVICES"
@@ -129,20 +120,22 @@ echo "LOG_PREFIX: $LOG_PREFIX"
 echo "LOG_DIR: $LOG_DIR"
 echo "num_generations: $num_generations"
 echo "OUTPUT_DIR: $OUTPUT_DIR"
+echo "PROJECT_DIR: $PROJECT_DIR"
 echo "START_VLLM: $START_VLLM"
+echo "SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT"
+echo "RESUME_MODE: $RESUME_MODE"
+echo "WANDB_RUN_ID: $WANDB_RUN_ID"
+echo "RESUME_TIMESTAMP: $RESUME_TIMESTAMP"
 echo "========================"
 
-# 启动GPU监控（每5秒记录一次）- debug 模式默认不启用
-if [ "$MODE" != "debug" ]; then
-  nohup bash scripts/gpu_monitor.sh 5 "gpu_usage" "${LOG_DIR}" > /dev/null 2>&1 &
-  MONITOR_PID=$!
-  echo "GPU监控已启动 PID: $MONITOR_PID"
-fi
+# 启动GPU监控（每5秒记录一次）
+nohup bash scripts/gpu_monitor.sh 5 "gpu_usage" "${LOG_DIR}" > /dev/null 2>&1 &
+MONITOR_PID=$!
+echo "GPU监控已启动 PID: $MONITOR_PID"
 
 # 记录配置参数到日志文件
 PARAM_LOG="${LOG_DIR}/config_params.log"
-echo "MODE: $MODE" > "$PARAM_LOG"
-echo "NUM_PROCESSES: $NUM_PROCESSES" >> "$PARAM_LOG"
+echo "NUM_PROCESSES: $NUM_PROCESSES" > "$PARAM_LOG"
 echo "EXP_TYPE: $EXP_TYPE" >> "$PARAM_LOG"
 echo "CUDA_DEVICES: $CUDA_DEVICES" >> "$PARAM_LOG"
 echo "BATCH_SIZE: $BATCH_SIZE" >> "$PARAM_LOG"
@@ -156,79 +149,62 @@ echo "LOG_PREFIX: $LOG_PREFIX" >> "$PARAM_LOG"
 echo "LOG_DIR: $LOG_DIR" >> "$PARAM_LOG"
 echo "num_generations: $num_generations" >> "$PARAM_LOG"
 echo "OUTPUT_DIR: $OUTPUT_DIR" >> "$PARAM_LOG"
+echo "PROJECT_DIR: $PROJECT_DIR" >> "$PARAM_LOG"
 echo "START_VLLM: $START_VLLM" >> "$PARAM_LOG"
+echo "SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT" >> "$PARAM_LOG"
+echo "RESUME_MODE: $RESUME_MODE" >> "$PARAM_LOG"
+echo "WANDB_RUN_ID: $WANDB_RUN_ID" >> "$PARAM_LOG"
+echo "RESUME_TIMESTAMP: $RESUME_TIMESTAMP" >> "$PARAM_LOG"
 
 # 启动 vLLM（可选）
 if [ "$START_VLLM" = true ]; then
-  nohup env CUDA_VISIBLE_DEVICES=0 \
-      trl vllm-serve \
-      --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-1.5B \
-      > "${LOG_DIR}/vllm-server.log" 2>&1 &
+  if [ "$RESUME_MODE" = true ]; then
+    nohup env CUDA_VISIBLE_DEVICES=0 \
+        trl vllm-serve \
+        --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-1.5B \
+        >> "$VLLM_LOG_FILE" 2>&1 &
+  else
+    nohup env CUDA_VISIBLE_DEVICES=0 \
+        trl vllm-serve \
+        --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-1.5B \
+        > "$VLLM_LOG_FILE" 2>&1 &
+  fi
   VLLM_PID=$!
   echo "vLLM server started with PID: $VLLM_PID"
 else
   echo "vLLM server skipped (START_VLLM=false)"
 fi
 
-# 如果不启动 vLLM，则通过 CLI 覆盖 YAML，关闭 use_vllm
+# CLI 追加参数
 EXTRA_ARGS=""
 if [ "$START_VLLM" != true ]; then
   EXTRA_ARGS="--use_vllm false"
 fi
 
-# 仅在 debug 模式下，缩短生成长度（覆盖 YAML 的 max_completion_length: 2048）
-if [ "$MODE" = "debug" ]; then
-  EXTRA_ARGS="$EXTRA_ARGS --max_completion_length 256"
-fi
-
-# debug 关闭所有报告集成，覆盖 YAML 的 report_to: [wandb]
-if [ "$MODE" = "debug" ]; then
-  EXTRA_ARGS="$EXTRA_ARGS --report_to none"
-fi
-
-# 启动训练脚本：debug 模式不加载 zero3 配置；train 模式使用 zero3 配置
-if [ "$MODE" = "debug" ]; then
-  echo "[DEBUG] 通过 accelerate launch 前台启动，便于多卡 pdb/print 调试"
-  echo "Command: CUDA_VISIBLE_DEVICES=$CUDA_DEVICES accelerate launch --num_processes $NUM_PROCESSES --multi_gpu $SCRIPT_PATH ..."
-  env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
-    accelerate launch --num_processes "$NUM_PROCESSES" --multi_gpu \
-    "$SCRIPT_PATH" \
-      --per_device_eval_batch_size "$BATCH_SIZE" \
-      --per_device_train_batch_size "$BATCH_SIZE" \
-      --gradient_accumulation_steps "$GRAD_ACCUM" \
-      --learning_rate "$lr" \
-      --max_steps "$MAX_STEPS" \
-      --num_generations "$num_generations" \
-      --output_dir "$OUTPUT_DIR" \
-      --config "$CONFIG_FILE" \
-      --wandb_project "$WANDB_PROJECT" \
-      --run_name "$RUN_NAME" \
-      $EXTRA_ARGS
+# 启动训练脚本（线上 runs 均走 nohup 后台）
+if [ "$RESUME_MODE" = true ]; then
+  nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
+      accelerate launch --config_file recipes/accelerate_configs/zero3.yaml --num_processes=$NUM_PROCESSES \
+      $SCRIPT_PATH \
+      --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
+      --num_generations $num_generations --output_dir $OUTPUT_DIR \
+      --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT $EXTRA_ARGS \
+      >> "$RUN_LOG_FILE" 2>&1 &
 else
   nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
       accelerate launch --config_file recipes/accelerate_configs/zero3.yaml --num_processes=$NUM_PROCESSES \
       $SCRIPT_PATH \
       --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
       --num_generations $num_generations --output_dir $OUTPUT_DIR \
-      --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME $EXTRA_ARGS \
-      > "${LOG_DIR}/run_${LOG_PREFIX}.log" 2>&1 &
+      --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT $EXTRA_ARGS \
+      > "$RUN_LOG_FILE" 2>&1 &
 fi
-if [ "$MODE" != "debug" ]; then
-  TRAINING_PID=$!
-  wait $TRAINING_PID
-  echo "Training process started with PID: $TRAINING_PID"
-fi
+TRAINING_PID=$!
+wait $TRAINING_PID
+echo "Training process started with PID: $TRAINING_PID"
 
-if [ "$MODE" != "debug" ]; then
-  if [ "$START_VLLM" = true ]; then
-    echo "Both processes started in the background. Check ${LOG_DIR}/vllm-server.log and ${LOG_DIR}/run_${LOG_PREFIX}.log for output."
-  else
-    echo "Training process started in the background. Check ${LOG_DIR}/run_${LOG_PREFIX}.log for output."
-  fi
-fi
+echo "进程已启动。查看 ${LOG_DIR}/run_${LOG_PREFIX}.log 与 ${LOG_DIR}/vllm-server.log 了解详情。"
 
 # 结束监控
-if [ "$MODE" != "debug" ]; then
-  kill $MONITOR_PID
-  echo "GPU监控已停止"
-fi
+kill $MONITOR_PID
+echo "GPU监控已停止"

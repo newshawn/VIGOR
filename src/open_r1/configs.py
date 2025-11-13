@@ -46,7 +46,7 @@ class GRPOConfig(trl.GRPOConfig):
         },
     )
     ref_reward_weight: float = field(
-        default=0.5,
+        default=0.0,
         metadata={
             "help": "Weight applied to the reference-model log-probability reward (negative perplexity). Set to 0 to disable."
         },
@@ -74,7 +74,7 @@ class GRPOConfig(trl.GRPOConfig):
         metadata={"help": "Lower bound for mean pairwise similarity. Prompts below this will be filtered."},
     )
     semantic_similarity_high: float = field(
-        default=0.90,
+        default=1.00,
         metadata={"help": "Upper bound for mean pairwise similarity. Prompts above this will be filtered."},
     )
     semantic_embedding_api_base: Optional[str] = field(
@@ -143,6 +143,20 @@ class GRPOConfig(trl.GRPOConfig):
         metadata={
             "help": "Maximum number of prompt groups to visualize per KL reward plot (sorted by standard deviation)."
         },
+    )
+    prompt_dump_enabled: bool = field(
+        default=True,
+        metadata={
+            "help": "When true, persist prompt + completion snapshots to JSON files under output_dir/prompt_completions."
+        },
+    )
+    prompt_dump_every_n_steps: int = field(
+        default=5,
+        metadata={"help": "Number of optimizer steps between prompt/completion dumps (must be >=1)."},
+    )
+    prompt_dump_max_prompts: int = field(
+        default=100000,
+        metadata={"help": "Maximum number of unique prompts to include in each dump snapshot."},
     )
 
 

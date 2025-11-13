@@ -14,8 +14,10 @@
 
 # This file is adapted from trl-0.18.0 grpo_trainer.py
 
+import json
 import math
 import os
+import shutil
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -667,6 +669,7 @@ class INTUITORTrainer(Trainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
+        self.log_completions = False
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
@@ -699,6 +702,15 @@ class INTUITORTrainer(Trainer):
         self._kl_plot_dir = Path(self.args.output_dir).resolve() / "kl_reward_plots"
         self._last_kl_plot_step = -1
         self._kl_plot_warning_emitted = False
+        self.prompt_dump_enabled = bool(getattr(args, "prompt_dump_enabled", False))
+        self.prompt_dump_every_n_steps = max(1, int(getattr(args, "prompt_dump_every_n_steps", 5)))
+        self.prompt_dump_max_prompts = max(1, int(getattr(args, "prompt_dump_max_prompts", 50)))
+        self._prompt_dump_dir = (
+            Path(self.args.output_dir).resolve() / "prompt_completions" if self.prompt_dump_enabled else None
+        )
+        self._last_prompt_dump_step = -1
+        if self.prompt_dump_enabled and self.accelerator.is_main_process:
+            self._prompt_dump_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if the effective batch size can be divided by the number of generations
         if self.num_generations < 2:
@@ -1901,7 +1913,62 @@ class INTUITORTrainer(Trainer):
                     df = df.drop_duplicates(subset=["prompt"])
                 wandb.log({"completions": wandb.Table(dataframe=df)})
 
+        self._maybe_dump_prompt_completions()
         self._maybe_save_kl_reward_plot()
+
+    def _maybe_dump_prompt_completions(self) -> None:
+        """Persist prompt/completion samples to JSON snapshots at a fixed cadence."""
+        if not self.prompt_dump_enabled or self._prompt_dump_dir is None:
+            return
+        if not self.accelerator.is_main_process:
+            return
+        step = int(self.state.global_step)
+        if step <= 0 or step == self._last_prompt_dump_step:
+            return
+        if step % self.prompt_dump_every_n_steps != 0:
+            return
+
+        prompts = list(self._textual_logs["prompt"])
+        completions = list(self._textual_logs["completion"])
+        if not prompts or not completions:
+            return
+        sample_count = min(len(prompts), len(completions))
+        reward_logs = {name: list(values) for name, values in self._textual_logs["rewards"].items()}
+
+        grouped: list[dict[str, Any]] = []
+        prompt_to_index: dict[str, int] = {}
+        for idx in range(sample_count):
+            prompt = prompts[idx]
+            completion = completions[idx]
+            if prompt not in prompt_to_index:
+                if len(grouped) >= self.prompt_dump_max_prompts:
+                    continue
+                prompt_to_index[prompt] = len(grouped)
+                grouped.append({"prompt": prompt, "samples": []})
+            entry = grouped[prompt_to_index[prompt]]
+            sample: dict[str, Any] = {"completion": completion}
+            if reward_logs:
+                sample["rewards"] = {
+                    name: reward_logs[name][idx]
+                    for name in reward_logs
+                    if idx < len(reward_logs[name])
+                }
+            entry["samples"].append(sample)
+
+        if not grouped:
+            return
+
+        step_dir = self._prompt_dump_dir / f"step-{step:06d}"
+        if step_dir.exists():
+            shutil.rmtree(step_dir)
+        step_dir.mkdir(parents=True, exist_ok=True)
+        for prompt_idx, payload in enumerate(grouped, start=1):
+            file_path = step_dir / f"prompt-{prompt_idx:04d}.json"
+            data = {"step": step, **payload}
+            with file_path.open("w", encoding="utf-8") as fp:
+                json.dump(data, fp, ensure_ascii=False, indent=2)
+
+        self._last_prompt_dump_step = step
 
     def _clear_reward_plot_buffer(self) -> None:
         for buf in self._kl_plot_buffer.values():

@@ -9,12 +9,19 @@ cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
 export PATH=/usr/local/cuda-12.4/bin:${PATH} 
 export CUDA_HOME=/usr/local/cuda-12.4
+export WANDB_BASE_URL=https://api.bandw.top
 export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
-export WANDB_MODE=offline
+export WANDB_MODE=online
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # 设置中国时区
 # export TZ='Asia/Shanghai'
+
+# === 手动/环境可配置的续跑参数（默认关闭） ===
+export RESUME_MODE=false
+# export RESUME_MODE=true
+# export RESUME_TIMESTAMP=20251113_073223
+# export WANDB_RUN_ID=ihmq57k3
 num_generations=8 # 作者使用7，但是3卡时候用7会犯错
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
@@ -44,82 +51,92 @@ fi
 if [ "$EXP_TYPE" = "grpo" ]; then
     SCRIPT_PATH="src/open_r1/grpo.py"
     CONFIG_FILE="recipes/Qwen2.5-3B/grpo/config_demo.yaml"
-    WANDB_PROJECT="open-r1-grpo"
+    WANDB_PROJECT="open-r1-grpo_qwen2.5-3B"
     RUN_NAME="Qwen2.5-GRPO-3B"
     LOG_PREFIX="grpo"
     BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-GRPO-3B"
 else
     SCRIPT_PATH="src/open_r1/intuitor.py"
     CONFIG_FILE="recipes/Qwen2.5-3B/intuitor/config_demo_lora.yaml"     
-    WANDB_PROJECT="open-r1-intuitor"
+    WANDB_PROJECT="open-r1-intuitor_qwen2.5-3B"
     RUN_NAME="Qwen2.5-Intuitor-3B"
     LOG_PREFIX="intuitor"
     BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B"
 fi
 
 
-# 创建日志目录
-# TIMESTAMP=$(date -d "+8 hour" +"%Y%m%d_%H%M%S")
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_DIR="logs/${LOG_PREFIX}_${NUM_PROCESSES}_3B/${TIMESTAMP}"
+# 创建日志/输出目录
+if [ "$RESUME_MODE" = true ]; then
+    : "${RESUME_TIMESTAMP:?RESUME_MODE=true 但 RESUME_TIMESTAMP 未设置}"  # 如果没有传 RESUME_TIMESTAMP，脚本会立刻报错并退出，提示用户传参
+    PROJECT_DIR="${BASE_OUTPUT_DIR}_${RESUME_TIMESTAMP}"
+    LOG_DIR="${PROJECT_DIR}/logs"
+    OUTPUT_DIR="${PROJECT_DIR}/ckpt"
+    echo "[RESUME] PROJECT_DIR=$PROJECT_DIR"
+    echo "[RESUME] LOG_DIR=$LOG_DIR"
+    echo "[RESUME] OUTPUT_DIR=$OUTPUT_DIR"
+else
+    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+    PROJECT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
+    LOG_DIR="${PROJECT_DIR}/logs"
+    OUTPUT_DIR="${PROJECT_DIR}/ckpt"
+    RUN_NAME="${RUN_NAME}_${TIMESTAMP}"   # wandb 的 run_name
+fi
+if [ -n "$PROJECT_DIR" ]; then
+    mkdir -p "$PROJECT_DIR"
+fi
 mkdir -p "$LOG_DIR"
-
-# 模型 checkpoint 输出目录（带时间戳，避免覆盖）
-OUTPUT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
-# OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709"
 mkdir -p "$OUTPUT_DIR"
+RUN_LOG_FILE="${LOG_DIR}/run_${LOG_PREFIX}.log"
+VLLM_LOG_FILE="${LOG_DIR}/vllm-server.log"
 
-# 显示当前配置参数
-echo "===== 当前配置参数 ====="
-echo "NUM_PROCESSES: $NUM_PROCESSES"
-echo "EXP_TYPE: $EXP_TYPE"
-echo "CUDA_DEVICES: $CUDA_DEVICES"
-echo "BATCH_SIZE: $BATCH_SIZE"
-echo "GRAD_ACCUM: $GRAD_ACCUM"
-echo "lr: $lr"
-echo "SCRIPT_PATH: $SCRIPT_PATH"
-echo "CONFIG_FILE: $CONFIG_FILE"
-echo "WANDB_PROJECT: $WANDB_PROJECT"
-echo "RUN_NAME: $RUN_NAME"
-echo "LOG_PREFIX: $LOG_PREFIX"
-echo "LOG_DIR: $LOG_DIR"
-echo "num_generations: $num_generations"
-echo "OUTPUT_DIR: $OUTPUT_DIR"
-echo "START_VLLM: $START_VLLM"
-echo "SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT"
-echo "========================"
+# 显示/记录配置参数
+read -r -d '' RUN_CONFIG <<EOF
+===== 当前配置参数 =====
+NUM_PROCESSES: $NUM_PROCESSES
+EXP_TYPE: $EXP_TYPE
+CUDA_DEVICES: $CUDA_DEVICES
+BATCH_SIZE: $BATCH_SIZE
+GRAD_ACCUM: $GRAD_ACCUM
+lr: $lr
+SCRIPT_PATH: $SCRIPT_PATH
+CONFIG_FILE: $CONFIG_FILE
+WANDB_PROJECT: $WANDB_PROJECT
+RUN_NAME: $RUN_NAME
+LOG_PREFIX: $LOG_PREFIX
+LOG_DIR: $LOG_DIR
+num_generations: $num_generations
+OUTPUT_DIR: $OUTPUT_DIR
+PROJECT_DIR: $PROJECT_DIR
+START_VLLM: $START_VLLM
+SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT
+RESUME_MODE: $RESUME_MODE
+WANDB_RUN_ID: $WANDB_RUN_ID
+RESUME_TIMESTAMP: $RESUME_TIMESTAMP
+========================
+EOF
+printf "%s\n" "$RUN_CONFIG"
+printf "%s\n" "$RUN_CONFIG" > "${LOG_DIR}/config_params.log"
 
 # 启动GPU监控（每5秒记录一次）
 nohup bash scripts/gpu_monitor.sh 5 "gpu_usage" "${LOG_DIR}" > /dev/null 2>&1 &
 MONITOR_PID=$!
 echo "GPU监控已启动 PID: $MONITOR_PID"
 
-# 记录配置参数到日志文件
-PARAM_LOG="${LOG_DIR}/config_params.log"
-echo "NUM_PROCESSES: $NUM_PROCESSES" > "$PARAM_LOG"
-echo "EXP_TYPE: $EXP_TYPE" >> "$PARAM_LOG"
-echo "CUDA_DEVICES: $CUDA_DEVICES" >> "$PARAM_LOG"
-echo "BATCH_SIZE: $BATCH_SIZE" >> "$PARAM_LOG"
-echo "GRAD_ACCUM: $GRAD_ACCUM" >> "$PARAM_LOG"
-echo "lr: $lr" >> "$PARAM_LOG"
-echo "SCRIPT_PATH: $SCRIPT_PATH" >> "$PARAM_LOG"
-echo "CONFIG_FILE: $CONFIG_FILE" >> "$PARAM_LOG"
-echo "WANDB_PROJECT: $WANDB_PROJECT" >> "$PARAM_LOG"
-echo "RUN_NAME: $RUN_NAME" >> "$PARAM_LOG"
-echo "LOG_PREFIX: $LOG_PREFIX" >> "$PARAM_LOG"
-echo "LOG_DIR: $LOG_DIR" >> "$PARAM_LOG"
-echo "num_generations: $num_generations" >> "$PARAM_LOG"
-echo "OUTPUT_DIR: $OUTPUT_DIR" >> "$PARAM_LOG"
-echo "START_VLLM: $START_VLLM" >> "$PARAM_LOG"
-echo "SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT" >> "$PARAM_LOG"
-
 
 # 启动 vLLM（可选）
+# 启动 vLLM 时，根据 RESUME_MODE 选择追加日志还是覆盖 >> 是追加， > 是覆盖
 if [ "$START_VLLM" = true ]; then
-  nohup env CUDA_VISIBLE_DEVICES=$VLLM_DEVICE \
-      trl vllm-serve \
-      --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B \
-      > "${LOG_DIR}/vllm-server.log" 2>&1 &
+  if [ "$RESUME_MODE" = true ]; then
+    nohup env CUDA_VISIBLE_DEVICES=$VLLM_DEVICE \
+        trl vllm-serve \
+        --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B \
+        >> "$VLLM_LOG_FILE" 2>&1 &
+  else
+    nohup env CUDA_VISIBLE_DEVICES=$VLLM_DEVICE \
+        trl vllm-serve \
+        --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B \
+        > "$VLLM_LOG_FILE" 2>&1 &
+  fi
   VLLM_PID=$!
   echo "vLLM server started with PID: $VLLM_PID on GPU $VLLM_DEVICE"
 else
@@ -133,12 +150,24 @@ if [ "$START_VLLM" != true ]; then
 fi
 
 # 启动训练脚本，默认的是24g版本，num_processes=7；为3的时候就使用48g显存
-nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
-    accelerate launch --config_file recipes/accelerate_configs/zero3.yaml --num_processes=$NUM_PROCESSES \
-    $SCRIPT_PATH \
-    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
-    --num_generations $num_generations --output_dir $OUTPUT_DIR \
-    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT $EXTRA_ARGS > "${LOG_DIR}/run_${LOG_PREFIX}.log" 2>&1 &
+# 唯一差别在重定向符号：RESUME_MODE=true 时用 >> "$RUN_LOG_FILE"（追加），保留旧日志并把新的 stdout/stderr 接在文件末尾；RESUME_MODE=false 时用 > "$RUN_LOG_FILE"（覆盖），启动前会清空同名文件再写入
+if [ "$RESUME_MODE" = true ]; then
+  nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
+      accelerate launch --config_file recipes/accelerate_configs/zero3.yaml --num_processes=$NUM_PROCESSES \
+      $SCRIPT_PATH \
+      --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
+      --num_generations $num_generations --output_dir $OUTPUT_DIR \
+      --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT $EXTRA_ARGS \
+      >> "$RUN_LOG_FILE" 2>&1 &
+else
+  nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
+      accelerate launch --config_file recipes/accelerate_configs/zero3.yaml --num_processes=$NUM_PROCESSES \
+      $SCRIPT_PATH \
+      --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
+      --num_generations $num_generations --output_dir $OUTPUT_DIR \
+      --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT $EXTRA_ARGS \
+      > "$RUN_LOG_FILE" 2>&1 &
+fi
 TRAINING_PID=$!
 wait $TRAINING_PID
 echo "Training process started with PID: $TRAINING_PID"
