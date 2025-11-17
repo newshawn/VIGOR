@@ -45,6 +45,22 @@ class GRPOConfig(trl.GRPOConfig):
             "help": "Step size eta used for the KL-based reward approximation. Defaults to learning_rate when unset."
         },
     )
+    kl_reward_diversity_weight: float = field(
+        default=0.3,
+        metadata={
+            "help": "Weight for the KL reward diversity bonus (log-ratio vs uniform). Set to 0 to disable."
+        },
+    )
+    kl_reward_diversity_temperature: float = field(
+        default=1,
+        metadata={
+            "help": "Temperature for softmax over per-prompt KL rewards when computing diversity bonus. Lower is sharper."
+        },
+    )
+    kl_reward_diversity_epsilon: float = field(
+        default=1e-8,
+        metadata={"help": "Minimum probability clamp inside diversity bonus to avoid log underflow."},
+    )
     ref_reward_weight: float = field(
         default=0.0,
         metadata={

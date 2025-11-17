@@ -9,7 +9,11 @@ cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
 export PATH=/usr/local/cuda-12.4/bin:${PATH} 
 export CUDA_HOME=/usr/local/cuda-12.4
-export WANDB_BASE_URL=https://api.bandw.top
+# export WANDB_BASE_URL=https://api.bandw.top
+export http_proxy=http://10.130.130.5:7891
+export https_proxy=http://10.130.130.5:7891
+export no_proxy="127.0.0.1,localhost,0.0.0.0,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local"
+export NO_PROXY="$no_proxy"
 export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_MODE=online
 export ACCELERATE_LOG_LEVEL=info

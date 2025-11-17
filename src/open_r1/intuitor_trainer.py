@@ -598,7 +598,10 @@ class INTUITORTrainer(Trainer):
             kl_eta = 1.0
         self.kl_reward_eta = float(kl_eta)
         self._kl_reward_params_cache = None
-
+        self.kl_reward_diversity_weight = float(getattr(args, "kl_reward_diversity_weight", 0.1))
+        self.kl_reward_diversity_temperature = float(getattr(args, "kl_reward_diversity_temperature", 0.1))
+        self.kl_reward_diversity_epsilon = float(getattr(args, "kl_reward_diversity_epsilon", 1e-8))
+        # import pdb; pdb.set_trace()
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 
@@ -1155,6 +1158,40 @@ class INTUITORTrainer(Trainer):
 
         return torch.stack(rewards).to(device=model_device, dtype=torch.float32)
 
+    def _compute_kl_reward_diversity_bonus(
+        self, grouped_rewards: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Encourages the per-prompt KL rewards to avoid a uniform distribution by adding a log-ratio bonus.
+
+        Returns:
+            bonuses (`torch.Tensor`): Shape matches grouped_rewards. Each entry is added to the corresponding reward.
+            mean_kl (`torch.Tensor`): Mean KL(q || uniform) across prompts for logging.
+            mean_entropy (`torch.Tensor`): Mean entropy of q across prompts for logging.
+        """
+
+        if grouped_rewards.numel() == 0:
+            zero = grouped_rewards.new_zeros(1)
+            return grouped_rewards.clone(), zero, zero
+
+        temperature = max(float(self.kl_reward_diversity_temperature), 1e-6)
+        epsilon = float(self.kl_reward_diversity_epsilon)
+        scaled = grouped_rewards / temperature
+        scaled = scaled - scaled.max(dim=1, keepdim=True).values
+        probs = torch.softmax(scaled, dim=1)
+        probs = probs.clamp_min(epsilon)
+        log_probs = probs.log()
+        num_generations = grouped_rewards.size(1)
+        log_uniform = -math.log(max(1, num_generations))
+        log_ratio = log_probs - log_uniform
+        bonuses = self.kl_reward_diversity_weight * log_ratio
+        kl_per_prompt = (probs * log_ratio).sum(dim=1)
+        entropy_per_prompt = -(probs * log_probs).sum(dim=1)
+        mean_kl = kl_per_prompt.mean()
+        mean_entropy = entropy_per_prompt.mean()
+        # import pdb; pdb.set_trace()
+        return bonuses, mean_kl, mean_entropy
+
     def _compute_tail_repeat_reward(self, completion_ids: torch.Tensor, completion_mask: torch.Tensor) -> Optional[torch.Tensor]:
         if not self._tail_repeat_enabled:
             return None
@@ -1531,7 +1568,6 @@ class INTUITORTrainer(Trainer):
         # === 多卡同步：收集各类奖励/掩码，后续统一做归一化与日志记录 ===
         rewards_per_func = gather(rewards_per_func)
         gathered_kl_rewards_raw = gather(kl_rewards).reshape(-1)    # 将所有gpu的kl_reward聚集到一起，例如单卡kl_rewards.shape=[6]，那么gathered_kl_rewards.shape=[12]
-        kl_rewards_for_logging = gathered_kl_rewards_raw.detach().cpu().tolist()
         if ref_logprob_rewards is not None:
             gathered_ref_rewards = gather(ref_logprob_rewards)
             ref_rewards_for_logging = gathered_ref_rewards.detach().cpu().tolist()
@@ -1548,13 +1584,27 @@ class INTUITORTrainer(Trainer):
             semantic_mask_all = gather(semantic_mask_local).to(device=device)
         else:
             semantic_mask_all = None
-        # === Prompt-wise min-max normalization，将每个 prompt 的奖励映射到 [0, 1] ===
+        # === 将原始的kl_rewards的mean和std记录下来（如有 bonus，记录加成后的值） ===
         raw_kl_rewards_by_prompt = gathered_kl_rewards_raw.view(-1, self.num_generations)
+        kl_diversity_stats = None
+        if self.kl_reward_diversity_weight > 0.0:
+            (
+                kl_diversity_bonus,
+                kl_divergence_record,
+                kl_entropy_record,
+            ) = self._compute_kl_reward_diversity_bonus(raw_kl_rewards_by_prompt)
+            import pdb; pdb.set_trace()
+            gathered_kl_rewards_raw = gathered_kl_rewards_raw + kl_diversity_bonus.reshape(-1)
+            raw_kl_rewards_by_prompt = gathered_kl_rewards_raw.view(-1, self.num_generations)
+            kl_diversity_stats = (
+                float(kl_divergence_record.item()),
+                float(kl_entropy_record.item()),
+            )
         raw_mean_kl_rewards = raw_kl_rewards_by_prompt.mean(dim=1)
         raw_std_kl_rewards = raw_kl_rewards_by_prompt.std(dim=1)
         raw_kl_reward_record = raw_mean_kl_rewards.mean().item()
         raw_kl_reward_std_record = raw_std_kl_rewards.mean().item()
-
+        # === Prompt-wise min-max normalization，将每个 prompt 的奖励映射到 [0, 1] ===
         kl_rewards_norm_flat = normalize_per_prompt(gathered_kl_rewards_raw, self.num_generations)  # shape=[num_prompt*num_generations*num_device]
         gathered_kl_rewards = kl_rewards_norm_flat
         kl_rewards_norm_for_logging = kl_rewards_norm_flat.detach().cpu().tolist() # 保存归一化后的 KL 奖励用于文本日志
@@ -1713,6 +1763,10 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["rewards/kl_reward/std"].append(kl_reward_std_record)
         self._metrics[mode]["rewards/kl_reward_raw/mean"].append(raw_kl_reward_record)
         self._metrics[mode]["rewards/kl_reward_raw/std"].append(raw_kl_reward_std_record)
+        if kl_diversity_stats is not None:
+            kl_divergence_record, kl_entropy_record = kl_diversity_stats
+            self._metrics[mode]["rewards/kl_reward_diversity/kl"].append(kl_divergence_record)
+            self._metrics[mode]["rewards/kl_reward_diversity/entropy"].append(kl_entropy_record)
         if ref_reward_record is not None:
             self._metrics[mode]["rewards/ref_logprob/mean"].append(ref_reward_record)
             self._metrics[mode]["rewards/ref_logprob/std"].append(ref_reward_std_record)

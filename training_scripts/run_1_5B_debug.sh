@@ -11,8 +11,13 @@ export PATH=/usr/local/cuda-12.4/bin:${PATH}
 export CUDA_HOME=/usr/local/cuda-12.4
 export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_MODE=offline
-export WANDB_DISABLED=true
+export WANDB_DISABLED=True
+export http_proxy=http://10.130.130.5:7891
+export https_proxy=http://10.130.130.5:7891
+export no_proxy="127.0.0.1,localhost,0.0.0.0,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local"
+export NO_PROXY="$no_proxy"
 export ACCELERATE_LOG_LEVEL=info
+export CUDA_VISIBLE_DEVICES=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # 设置中国时区
 # export TZ='Asia/Shanghai'
@@ -24,7 +29,7 @@ NUM_PROCESSES=${#__DEV_ARR[@]}
 if [ "$NUM_PROCESSES" -le 0 ]; then
     NUM_PROCESSES=1
 fi
-BATCH_SIZE=6
+BATCH_SIZE=3
 GRAD_ACCUM=1
 lr=3.0e-06
 num_generations=3
@@ -34,18 +39,20 @@ if [ "$MAX_STEPS" = "-1" ]; then
 fi
 START_VLLM=false
 EXP_TYPE=intuitor
+ACCELERATE_CONFIG="recipes/accelerate_configs/zero3.yaml"
+DEBUG_TTY_MODE=true  # 设为 true 可让日志同步输出到终端，便于 pdb 交互,false则是打印到run_${LOG_PREFIX}.log
 
 # 根据实验类型设置脚本和配置
 if [ "$EXP_TYPE" = "grpo" ]; then
     SCRIPT_PATH="src/open_r1/grpo.py"
     CONFIG_FILE="recipes/Qwen2.5-1.5B/grpo/config_demo.yaml"
-    WANDB_PROJECT="open-r1-grpo"
+    WANDB_PROJECT="open-r1-grpo_qwen2.5-1.5B_debug"
     RUN_NAME="Qwen2.5-GRPO-1.5B-debug"
     LOG_PREFIX="grpo"
 else
     SCRIPT_PATH="src/open_r1/intuitor.py"
     CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo.yaml"
-    WANDB_PROJECT="open-r1-intuitor"
+    WANDB_PROJECT="open-r1-intuitor_qwen2.5-1.5B_debug"
     RUN_NAME="Qwen2.5-Intuitor-1.5B-debug"
     LOG_PREFIX="intuitor"
 fi
@@ -90,22 +97,30 @@ echo "MAX_STEPS: $MAX_STEPS" >> "$PARAM_LOG"
 EXTRA_ARGS="--max_completion_length 256 --report_to none --use_vllm false"
 
 echo "[DEBUG] 通过 accelerate launch 前台启动，便于多卡调试"
-echo "Command: CUDA_VISIBLE_DEVICES=$CUDA_DEVICES accelerate launch --num_processes $NUM_PROCESSES --multi_gpu $SCRIPT_PATH ..."
+echo "Command: CUDA_VISIBLE_DEVICES=$CUDA_DEVICES accelerate launch --config_file $ACCELERATE_CONFIG --num_processes $NUM_PROCESSES $SCRIPT_PATH ..."
 
-env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
-  accelerate launch --num_processes "$NUM_PROCESSES" --multi_gpu \
-  "$SCRIPT_PATH" \
-    --per_device_eval_batch_size "$BATCH_SIZE" \
-    --per_device_train_batch_size "$BATCH_SIZE" \
-    --gradient_accumulation_steps "$GRAD_ACCUM" \
-    --learning_rate "$lr" \
-    --max_steps "$MAX_STEPS" \
-    --num_generations "$num_generations" \
-    --output_dir "$OUTPUT_DIR" \
-    --config "$CONFIG_FILE" \
-    --wandb_project "$WANDB_PROJECT" \
-    --run_name "$RUN_NAME" \
-    $EXTRA_ARGS \
-    > "$RUN_LOG_FILE" 2>&1
+RUN_CMD=(
+  env CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
+  accelerate launch --config_file "$ACCELERATE_CONFIG" --num_processes "$NUM_PROCESSES"
+  "$SCRIPT_PATH"
+    --per_device_eval_batch_size "$BATCH_SIZE"
+    --per_device_train_batch_size "$BATCH_SIZE"
+    --gradient_accumulation_steps "$GRAD_ACCUM"
+    --learning_rate "$lr"
+    --max_steps "$MAX_STEPS"
+    --num_generations "$num_generations"
+    --output_dir "$OUTPUT_DIR"
+    --config "$CONFIG_FILE"
+    --wandb_project "$WANDB_PROJECT"
+    --run_name "$RUN_NAME"
+    $EXTRA_ARGS
+)
+
+if [ "$DEBUG_TTY_MODE" = true ]; then
+  echo "[DEBUG] DEBUG_TTY_MODE=true，日志会同时输出到终端和 $RUN_LOG_FILE，便于 pdb 交互。"
+  "${RUN_CMD[@]}" 2>&1 | tee "$RUN_LOG_FILE"
+else
+  "${RUN_CMD[@]}" > "$RUN_LOG_FILE" 2>&1
+fi
 
 echo "[DEBUG] 日志输出至: $RUN_LOG_FILE"
