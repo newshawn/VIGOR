@@ -17,7 +17,7 @@ export https_proxy=http://10.130.130.5:7891
 export no_proxy="127.0.0.1,localhost,0.0.0.0,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local"
 export NO_PROXY="$no_proxy"
 export ACCELERATE_LOG_LEVEL=info
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=3
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # 设置中国时区
 # export TZ='Asia/Shanghai'

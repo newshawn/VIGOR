@@ -1584,30 +1584,32 @@ class INTUITORTrainer(Trainer):
             semantic_mask_all = gather(semantic_mask_local).to(device=device)
         else:
             semantic_mask_all = None
-        # === 将原始的kl_rewards的mean和std记录下来（如有 bonus，记录加成后的值） ===
+        # === 将原始的kl_rewards的mean和std记录下来（不再使用多样性bonus） ===
         raw_kl_rewards_by_prompt = gathered_kl_rewards_raw.view(-1, self.num_generations)
         kl_diversity_stats = None
-        if self.kl_reward_diversity_weight > 0.0:
-            (
-                kl_diversity_bonus,
-                kl_divergence_record,
-                kl_entropy_record,
-            ) = self._compute_kl_reward_diversity_bonus(raw_kl_rewards_by_prompt)
-            import pdb; pdb.set_trace()
-            gathered_kl_rewards_raw = gathered_kl_rewards_raw + kl_diversity_bonus.reshape(-1)
-            raw_kl_rewards_by_prompt = gathered_kl_rewards_raw.view(-1, self.num_generations)
-            kl_diversity_stats = (
-                float(kl_divergence_record.item()),
-                float(kl_entropy_record.item()),
-            )
         raw_mean_kl_rewards = raw_kl_rewards_by_prompt.mean(dim=1)
         raw_std_kl_rewards = raw_kl_rewards_by_prompt.std(dim=1)
         raw_kl_reward_record = raw_mean_kl_rewards.mean().item()
         raw_kl_reward_std_record = raw_std_kl_rewards.mean().item()
-        # === Prompt-wise min-max normalization，将每个 prompt 的奖励映射到 [0, 1] ===
-        kl_rewards_norm_flat = normalize_per_prompt(gathered_kl_rewards_raw, self.num_generations)  # shape=[num_prompt*num_generations*num_device]
+
+        # === 分桶（分位数）KL 奖励：按每个 prompt 的梯度范数分位切分，映射到离散档位 ===
+        grad_norms_by_prompt = (-raw_kl_rewards_by_prompt).clamp_min(0.0)  # [num_prompt, num_generations]
+        quantile_levels = torch.tensor([0.2, 0.4, 0.6, 0.8], device=grad_norms_by_prompt.device)
+        quantiles = torch.quantile(grad_norms_by_prompt, quantile_levels, dim=1, keepdim=False)  # [4, num_prompt]
+        quantiles = quantiles.transpose(0, 1)  # [num_prompt, 4]
+        q20, q40, q60, q80 = [quantiles[:, i].unsqueeze(1) for i in range(4)]
+
+        kl_buckets = torch.zeros_like(grad_norms_by_prompt)
+        kl_buckets = torch.where(grad_norms_by_prompt <= q20, 2.0, kl_buckets)
+        kl_buckets = torch.where((grad_norms_by_prompt > q20) & (grad_norms_by_prompt <= q40), 1.0, kl_buckets)
+        kl_buckets = torch.where((grad_norms_by_prompt > q40) & (grad_norms_by_prompt <= q60), 0.0, kl_buckets)
+        kl_buckets = torch.where((grad_norms_by_prompt > q60) & (grad_norms_by_prompt <= q80), -1.0, kl_buckets)
+        kl_buckets = torch.where(grad_norms_by_prompt > q80, -2.0, kl_buckets)
+
+        kl_rewards_norm_flat = kl_buckets.reshape(-1)  # shape=[num_prompt*num_generations*num_device]
         gathered_kl_rewards = kl_rewards_norm_flat
-        kl_rewards_norm_for_logging = kl_rewards_norm_flat.detach().cpu().tolist() # 保存归一化后的 KL 奖励用于文本日志
+        kl_rewards_norm_for_logging = kl_rewards_norm_flat.detach().cpu().tolist()  # 保存离散化后的 KL 奖励用于文本日志
+        # import pdb; pdb.set_trace()
         # === 任务奖励聚合与优势计算（这里只有accuracy_reward，weight=0，不用于优化） ===    
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 

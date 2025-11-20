@@ -54,6 +54,7 @@ MODELS=(
 "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-40"
 "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-50"
 "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-60"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-90"
 )
 
 # 允许通过环境变量传参（便于集群作业/自动化脚本）
@@ -123,7 +124,8 @@ run_single_model() {
   # 生成输出目录名（父目录/子目录）
   local PARENT
   local CHILD
-  PARENT=$(basename "$(dirname "$MODEL_TRIMMED")")
+  # 取倒数第三层作为父目录（如 .../Qwen2.5-XXX/ckpt/checkpoint-20 -> Qwen2.5-XXX）
+  PARENT=$(basename "$(dirname "$(dirname "$MODEL_TRIMMED")")")
   CHILD=$(basename "$MODEL_TRIMMED")
   local MODEL_NAME="$PARENT/$CHILD"
 
