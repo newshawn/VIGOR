@@ -6,11 +6,15 @@
 
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
-export CUDA_VISIBLE_DEVICES=0,1,2,4
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 # 确保 HF 本地缓存与离线模式（集群/无网环境使用本地缓存）
 # 指定数据集缓存目录到共享盘，便于复用/持久化
+# export http_proxy=http://10.130.130.5:7891
+# export https_proxy=http://10.130.130.5:7891
+# export no_proxy="127.0.0.1,localhost,0.0.0.0,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local"
+# export NO_PROXY="$no_proxy"
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 export HF_DATASETS_CACHE="/run/determined/NAS1/public/xuexiang/light_eval"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
@@ -48,13 +52,46 @@ DEFAULT_MODEL=/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuito
 #   "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-grpo-3B_20251014_152032/checkpoint-40/"
 # )
 MODELS=(
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-10"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-20"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-30"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-40"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-50"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-60"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251110_141709/checkpoint-90"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-5"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-10"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-15"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-20"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-25"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-30"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-35"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-40"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-45"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-50"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-5"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-10"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-15"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-20"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-25"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-30"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-35"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-40"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-45"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-50"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-5"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-10"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-15"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-20"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-25"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-30"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-35"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-40"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-45"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-50"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-10"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-20"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-30"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-40"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-50"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-60"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251120_072958/ckpt/checkpoint-10"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251120_072958/ckpt/checkpoint-20"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251120_072958/ckpt/checkpoint-30"
+"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251120_072958/ckpt/checkpoint-40"
 )
 
 # 允许通过环境变量传参（便于集群作业/自动化脚本）
@@ -121,16 +158,22 @@ run_single_model() {
   # 去除模型路径末尾的斜杠，避免 basename/dirname 解析偏差
   local MODEL_TRIMMED="${MODEL%/}"
 
-  # 生成输出目录名（父目录/子目录）
+  # 生成输出目录名（上上级/上级/当前）
+  local GRANDPARENT
   local PARENT
   local CHILD
-  # 取倒数第三层作为父目录（如 .../Qwen2.5-XXX/ckpt/checkpoint-20 -> Qwen2.5-XXX）
-  PARENT=$(basename "$(dirname "$(dirname "$MODEL_TRIMMED")")")
+  GRANDPARENT=$(basename "$(dirname "$(dirname "$MODEL_TRIMMED")")")
+  PARENT=$(basename "$(dirname "$MODEL_TRIMMED")")
   CHILD=$(basename "$MODEL_TRIMMED")
-  local MODEL_NAME="$PARENT/$CHILD"
+  local MODEL_NAME="$GRANDPARENT/$PARENT/$CHILD"
 
   # vLLM 推理参数（保持与单模型版本一致）
-  local MODEL_ARGS="model_name=$MODEL_TRIMMED,dtype=bfloat16,max_model_length=32768,gpu_memory_utilization=0.8,generation_parameters={max_new_tokens:3072,temperature:0.6,top_p:0.95}"
+  local MODEL_ARGS="model_name=$MODEL_TRIMMED,dtype=bfloat16,max_model_length=32768,gpu_memory_utilization=0.8,generation_parameters={max_new_tokens:3072,temperature:0,top_p:1}"
+  if [[ "$MODEL_ARGS" == *"temperature:0"* && "$MODEL_ARGS" == *"top_p:1"* ]]; then
+    export EVAL_GREEDY_DECODE=1
+  else
+    export EVAL_GREEDY_DECODE=0
+  fi
 
   local OUTPUT_DIR="data/evals/$MODEL_NAME"
   local LOG_DIR="$OUTPUT_DIR/logs/$TIMESTAMP"

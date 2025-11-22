@@ -681,6 +681,7 @@ class INTUITORTrainer(Trainer):
         self._textual_logs = {
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
+            "entropy": deque(maxlen=maxlen),
             "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
             # Aggregated reward (after applying weights) per completion
             "aggregated_reward": deque(maxlen=maxlen),
@@ -750,6 +751,9 @@ class INTUITORTrainer(Trainer):
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
+
+        # Log optional components to make run config explicit.
+        self._log_optional_modules()
 
         if self.use_vllm:
             if not is_vllm_available():
@@ -1094,14 +1098,11 @@ class INTUITORTrainer(Trainer):
         prompt_mask: torch.Tensor,
         completion_ids: torch.Tensor,
         completion_mask: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         trainable_params = self._get_kl_reward_parameters(model)
         if len(trainable_params) == 0:
-            return torch.zeros(
-                prompt_ids.size(0),
-                device=prompt_ids.device,
-                dtype=torch.float32,
-            )
+            zero = torch.zeros(prompt_ids.size(0), device=prompt_ids.device, dtype=torch.float32)
+            return zero, zero
 
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
@@ -1116,7 +1117,8 @@ class INTUITORTrainer(Trainer):
         eta_sq = float(eta) * float(eta)
         eta_sq = torch.tensor(eta_sq, device=prompt_ids.device, dtype=torch.float32)
 
-        rewards = []
+        rewards: list[torch.Tensor] = []
+        entropies: list[torch.Tensor] = []
         model_device = prompt_ids.device
         for idx in range(input_ids.size(0)):
             model.zero_grad(set_to_none=True)
@@ -1126,6 +1128,7 @@ class INTUITORTrainer(Trainer):
 
             if completion_mask[idx].sum() <= 0:
                 rewards.append(torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0))
+                entropies.append(torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0))
                 continue
 
             with torch.enable_grad():
@@ -1156,7 +1159,24 @@ class INTUITORTrainer(Trainer):
             approx_kl = grad_norm
             rewards.append((-approx_kl).squeeze(0))
 
-        return torch.stack(rewards).to(device=model_device, dtype=torch.float32)
+            # 计算 completion 的平均熵（只统计标签为有效 token 的位置）
+            token_mask = single_labels[:, 1:].ne(-100)  # 对齐到 logits[:, :-1, :]
+            comp_len = int(token_mask.sum().item())
+            if comp_len > 0 and outputs.logits is not None:
+                logits = outputs.logits[:, :-1, :].float()  # align to target tokens
+                log_probs = logits.log_softmax(dim=-1)  # [1, seq_len-1, vocab_size]
+                token_entropy = -(log_probs.exp() * log_probs).sum(dim=-1)  # (1, seq_len-1)
+                mask = token_mask.float()
+                avg_entropy = (token_entropy * mask).sum() / comp_len
+                avg_entropy = avg_entropy.detach()
+            else:
+                avg_entropy = torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0)
+            entropies.append(avg_entropy)
+
+        return (
+            torch.stack(rewards).to(device=model_device, dtype=torch.float32),
+            torch.stack(entropies).to(device=model_device, dtype=torch.float32),
+        )
 
     def _compute_kl_reward_diversity_bonus(
         self, grouped_rewards: torch.Tensor
@@ -1217,6 +1237,33 @@ class INTUITORTrainer(Trainer):
             if excess > 0:
                 penalties[idx] = -scale * excess
         return penalties
+
+    def _log_optional_modules(self) -> None:
+        """Log which optional components are enabled/disabled for transparency."""
+        log_fn = getattr(self.accelerator, "print", print)
+
+        if self._ref_reward_enabled:
+            log_fn(f"[IntuitorTrainer] ref_reward enabled (weight={self.ref_reward_weight:.4f})")
+        else:
+            log_fn("[IntuitorTrainer] ref_reward disabled")
+
+        if self._tail_repeat_enabled:
+            log_fn(
+                "[IntuitorTrainer] tail_repeat_reward enabled "
+                f"(weight={self.tail_repeat_reward_weight:.4f}, min_run={self.tail_repeat_min_run}, "
+                f"penalty_scale={self.tail_repeat_penalty_scale:.4f})"
+            )
+        else:
+            log_fn("[IntuitorTrainer] tail_repeat_reward disabled")
+
+        if self.semantic_similarity_filter_enabled:
+            log_fn(
+                "[IntuitorTrainer] semantic_filter enabled "
+                f"(weight={self.semantic_reward_weight:.4f}, "
+                f"low={self.semantic_similarity_low:.3f}, high={self.semantic_similarity_high:.3f})"
+            )
+        else:
+            log_fn("[IntuitorTrainer] semantic_filter disabled")
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -1400,10 +1447,12 @@ class INTUITORTrainer(Trainer):
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
-        # 计算kl奖励
-        kl_rewards = self._compute_gradient_kl_reward(
+        # 计算kl奖励，并返回每个 completion 的平均熵（后续用于日志/指标）
+        kl_rewards, completion_entropies = self._compute_gradient_kl_reward(
             self.model, prompt_ids, prompt_mask, completion_ids, completion_mask
-        ).detach()
+        )
+        kl_rewards = kl_rewards.detach()
+        completion_entropies = completion_entropies.detach()
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
@@ -1568,6 +1617,7 @@ class INTUITORTrainer(Trainer):
         # === 多卡同步：收集各类奖励/掩码，后续统一做归一化与日志记录 ===
         rewards_per_func = gather(rewards_per_func)
         gathered_kl_rewards_raw = gather(kl_rewards).reshape(-1)    # 将所有gpu的kl_reward聚集到一起，例如单卡kl_rewards.shape=[6]，那么gathered_kl_rewards.shape=[12]
+        gathered_entropies = gather(completion_entropies).reshape(-1)
         if ref_logprob_rewards is not None:
             gathered_ref_rewards = gather(ref_logprob_rewards)
             ref_rewards_for_logging = gathered_ref_rewards.detach().cpu().tolist()
@@ -1591,6 +1641,12 @@ class INTUITORTrainer(Trainer):
         raw_std_kl_rewards = raw_kl_rewards_by_prompt.std(dim=1)
         raw_kl_reward_record = raw_mean_kl_rewards.mean().item()
         raw_kl_reward_std_record = raw_std_kl_rewards.mean().item()
+        entropy_mean_record = (
+            float(gathered_entropies.mean().item()) if gathered_entropies.numel() > 0 else float("nan")
+        )
+        entropy_std_record = (
+            float(gathered_entropies.std(unbiased=False).item()) if gathered_entropies.numel() > 0 else float("nan")
+        )
 
         # === 分桶（分位数）KL 奖励：按每个 prompt 的梯度范数分位切分，映射到离散档位 ===
         grad_norms_by_prompt = (-raw_kl_rewards_by_prompt).clamp_min(0.0)  # [num_prompt, num_generations]
@@ -1765,6 +1821,8 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["rewards/kl_reward/std"].append(kl_reward_std_record)
         self._metrics[mode]["rewards/kl_reward_raw/mean"].append(raw_kl_reward_record)
         self._metrics[mode]["rewards/kl_reward_raw/std"].append(raw_kl_reward_std_record)
+        self._metrics[mode]["entropy/mean"].append(entropy_mean_record)
+        self._metrics[mode]["entropy/std"].append(entropy_std_record)
         if kl_diversity_stats is not None:
             kl_divergence_record, kl_entropy_record = kl_diversity_stats
             self._metrics[mode]["rewards/kl_reward_diversity/kl"].append(kl_divergence_record)
@@ -1791,6 +1849,7 @@ class INTUITORTrainer(Trainer):
         gathered_completions = gather_object(completions_text)
         self._textual_logs["prompt"].extend(gathered_prompts)
         self._textual_logs["completion"].extend(gathered_completions)
+        self._textual_logs["entropy"].extend(gathered_entropies.detach().cpu().tolist())
         if mode == "train" and self.kl_reward_plot_enabled:
             self._kl_plot_buffer["prompt"].extend(gathered_prompts)
             self._kl_plot_buffer["kl_reward_norm"].extend(kl_rewards_norm_for_logging)
@@ -1990,6 +2049,7 @@ class INTUITORTrainer(Trainer):
             return
         sample_count = min(len(prompts), len(completions))
         reward_logs = {name: list(values) for name, values in self._textual_logs["rewards"].items()}
+        entropy_logs = list(self._textual_logs.get("entropy", []))
 
         grouped: list[dict[str, Any]] = []
         prompt_to_index: dict[str, int] = {}
@@ -2009,6 +2069,8 @@ class INTUITORTrainer(Trainer):
                     for name in reward_logs
                     if idx < len(reward_logs[name])
                 }
+            if idx < len(entropy_logs):
+                sample["entropy"] = entropy_logs[idx]
             entry["samples"].append(sample)
 
         if not grouped:
