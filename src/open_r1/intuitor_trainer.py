@@ -1347,6 +1347,8 @@ class INTUITORTrainer(Trainer):
         raw_std_kl_rewards = raw_kl_rewards_by_prompt.std(dim=1)
         raw_kl_reward_record = raw_mean_kl_rewards.mean().item()
         raw_kl_reward_std_record = raw_std_kl_rewards.mean().item()
+        entropy_weight_mean_record = float("nan")
+        entropy_weight_std_record = float("nan")
         entropy_mean_record = (
             float(gathered_entropies.mean().item()) if gathered_entropies.numel() > 0 else float("nan")
         )
@@ -1354,6 +1356,19 @@ class INTUITORTrainer(Trainer):
             float(gathered_entropies.std(unbiased=False).item()) if gathered_entropies.numel() > 0 else float("nan")
         )
 
+        # === 按 completion 熵对 KL 奖励做权重：高熵样本权重 < 1，把负值拉近 0；低熵样本权重 > 1，放大其负值 ===
+        if getattr(self.args, "kl_entropy_weighting_enabled", False) and gathered_entropies.numel() > 0:
+            entropy_target = float(getattr(self.args, "kl_entropy_weighting_target", 0.0))
+            if entropy_target > 0:
+                entropy_eps = 1e-6
+                w_min = float(getattr(self.args, "kl_entropy_weighting_min", 0.5))
+                w_max = float(getattr(self.args, "kl_entropy_weighting_max", 2.0))
+                H = gathered_entropies.view(-1, self.num_generations)
+                entropy_weights = (entropy_target / (H + entropy_eps)).clamp(w_min, w_max)
+                raw_kl_rewards_by_prompt = raw_kl_rewards_by_prompt * entropy_weights
+                entropy_weight_mean_record = entropy_weights.mean().item()
+                entropy_weight_std_record = entropy_weights.std(unbiased=False).item()
+        # import pdb; pdb.set_trace()
         # === KL 奖励归一：按每个 prompt 内 raw_kl（数值越大代表梯度越小、奖励越高）做 rank，映射到 [-1, 1] ===
         # raw_kl_rewards_by_prompt 为负数，绝对值越小（越靠近 0）表示梯度越小 → 奖励越高
         # 按 raw 值升序排序：最负的 rank 最低，最接近 0 的 rank 最高
@@ -1447,6 +1462,8 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["rewards/kl_reward_raw/std"].append(raw_kl_reward_std_record)
         self._metrics[mode]["entropy/mean"].append(entropy_mean_record)
         self._metrics[mode]["entropy/std"].append(entropy_std_record)
+        self._metrics[mode]["rewards/kl_entropy_weight/mean"].append(entropy_weight_mean_record)
+        self._metrics[mode]["rewards/kl_entropy_weight/std"].append(entropy_weight_std_record)
         if kl_diversity_stats is not None:
             kl_divergence_record, kl_entropy_record = kl_diversity_stats
             self._metrics[mode]["rewards/kl_reward_diversity/kl"].append(kl_divergence_record)

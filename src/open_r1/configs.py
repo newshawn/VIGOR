@@ -61,6 +61,26 @@ class GRPOConfig(trl.GRPOConfig):
         default=1e-8,
         metadata={"help": "Minimum probability clamp inside diversity bonus to avoid log underflow."},
     )
+    kl_entropy_weighting_enabled: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, reweight KL rewards by completion entropy (higher entropy => smaller magnitude, closer to 0)."
+        },
+    )
+    kl_entropy_weighting_target: float = field(
+        default=0.15,
+        metadata={
+            "help": "Target completion entropy used to scale weights. Effective weight is target/entropy, clipped by the bounds."
+        },
+    )
+    kl_entropy_weighting_min: float = field(
+        default=0.5,
+        metadata={"help": "Lower bound for entropy-based KL reward weights."},
+    )
+    kl_entropy_weighting_max: float = field(
+        default=2.0,
+        metadata={"help": "Upper bound for entropy-based KL reward weights."},
+    )
     ref_reward_weight: float = field(
         default=0.0,
         metadata={
