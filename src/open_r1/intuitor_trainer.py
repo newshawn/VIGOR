@@ -28,9 +28,7 @@ from typing import Any, Callable, Optional, Union
 
 import datasets
 import numpy as np
-import requests
 import torch
-import torch.nn.functional as F
 import torch.utils.data
 import transformers
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
@@ -459,13 +457,7 @@ class INTUITORTrainer(Trainer):
 
         # Reference model
         self.beta = args.beta
-        self.ref_reward_weight = float(getattr(args, "ref_reward_weight", 0.0))
-        self._ref_reward_enabled = self.ref_reward_weight != 0.0
-        self._needs_ref_model = (self.beta != 0.0) or self._ref_reward_enabled
-        self.tail_repeat_reward_weight = float(getattr(args, "tail_repeat_reward_weight", 0.0))
-        self.tail_repeat_min_run = max(1, int(getattr(args, "tail_repeat_min_run", 4)))
-        self.tail_repeat_penalty_scale = float(getattr(args, "tail_repeat_penalty_scale", 1.0))
-        self._tail_repeat_enabled = self.tail_repeat_reward_weight != 0.0
+        self._needs_ref_model = self.beta != 0.0
         if not self._needs_ref_model:
             # Neither KL penalty nor reference reward is active; no ref model needed.
             self.ref_model = None
@@ -555,42 +547,6 @@ class INTUITORTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
-        self.semantic_reward_weight = float(getattr(args, "semantic_reward_weight", 0.0))
-        self.semantic_similarity_low = float(getattr(args, "semantic_similarity_low", 0.2))
-        self.semantic_similarity_high = float(getattr(args, "semantic_similarity_high", 0.9))
-        self.semantic_embedding_api_base = getattr(args, "semantic_embedding_api_base", None)
-        self.semantic_embedding_api_key = getattr(args, "semantic_embedding_api_key", None)
-        self.semantic_embedding_model = getattr(args, "semantic_embedding_model", "Qwen/Qwen3-Embedding-4B")
-        self.semantic_embedding_timeout = float(getattr(args, "semantic_embedding_timeout", 30.0))
-        self.semantic_embedding_batch_size = max(1, int(getattr(args, "semantic_embedding_batch_size", 16)))
-        embedding_dtype_str = getattr(args, "semantic_embedding_dtype", "float16")
-        dtype_map = {
-            "float16": torch.float16,
-            "fp16": torch.float16,
-            "half": torch.float16,
-            "bfloat16": torch.bfloat16,
-            "bf16": torch.bfloat16,
-            "float32": torch.float32,
-            "fp32": torch.float32,
-        }
-        if isinstance(embedding_dtype_str, torch.dtype):
-            self.semantic_embedding_dtype = embedding_dtype_str
-        else:
-            lowered = str(embedding_dtype_str).lower()
-            if lowered not in dtype_map:
-                raise ValueError(
-                    f"Unsupported semantic_embedding_dtype '{embedding_dtype_str}'. "
-                    "Use one of: float16, bfloat16, float32."
-                )
-            self.semantic_embedding_dtype = dtype_map[lowered]
-        if self.semantic_similarity_low > self.semantic_similarity_high:
-            self.semantic_similarity_low, self.semantic_similarity_high = (
-                self.semantic_similarity_high,
-                self.semantic_similarity_low,
-            )
-        self.semantic_similarity_filter_enabled = (
-            self.semantic_similarity_low > 0.0 or self.semantic_similarity_high < 1.0
-        )
         kl_eta = getattr(args, "kl_reward_eta", None)
         if kl_eta is None:
             kl_eta = getattr(args, "learning_rate", None)
@@ -701,7 +657,6 @@ class INTUITORTrainer(Trainer):
         self._kl_plot_buffer = {
             "prompt": deque(maxlen=maxlen),
             "kl_reward_norm": deque(maxlen=maxlen),
-            "ref_reward": deque(maxlen=maxlen),
         }
         self._kl_plot_dir = Path(self.args.output_dir).resolve() / "kl_reward_plots"
         self._last_kl_plot_step = -1
@@ -753,7 +708,7 @@ class INTUITORTrainer(Trainer):
         set_seed(args.seed, device_specific=True)
 
         # Log optional components to make run config explicit.
-        self._log_optional_modules()
+        # self._log_optional_modules()
 
         if self.use_vllm:
             if not is_vllm_available():
@@ -940,107 +895,6 @@ class INTUITORTrainer(Trainer):
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
-    def _compute_completion_embeddings_remote(
-        self,
-        completions_text: list[str],
-        completion_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        api_key = self.semantic_embedding_api_key or os.environ.get("SEMANTIC_EMBEDDING_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "Semantic embedding API key is required. Provide `semantic_embedding_api_key` in the config "
-                "or set the `SEMANTIC_EMBEDDING_API_KEY` environment variable."
-            )
-
-        base_url = (self.semantic_embedding_api_base or "https://api.siliconflow.cn/v1").rstrip("/")
-        endpoint = f"{base_url}/embeddings"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        valid_mask = (completion_mask.sum(dim=1) > 0).cpu()
-        device = completion_mask.device
-
-        embeddings_list: list[torch.Tensor] = []
-        indices: list[int] = []
-
-        batch_size = max(1, self.semantic_embedding_batch_size)
-        buffer_inputs: list[str] = []
-        buffer_indices: list[int] = []
-
-        def flush_buffer() -> None:
-            if not buffer_inputs:
-                return
-            vectors = self._request_remote_embeddings(endpoint, headers, buffer_inputs)
-            for idx, vec in zip(buffer_indices, vectors):
-                vec_tensor = torch.tensor(
-                    vec,
-                    dtype=self.semantic_embedding_dtype,
-                    device="cpu",
-                )
-                embeddings_list.append(vec_tensor)
-                indices.append(idx)
-            buffer_inputs.clear()
-            buffer_indices.clear()
-
-        for idx, text in enumerate(completions_text):
-            if not valid_mask[idx]:
-                continue
-            clean_text = text if text.strip() else " "
-            buffer_inputs.append(clean_text)
-            buffer_indices.append(idx)
-            if len(buffer_inputs) >= batch_size:
-                flush_buffer()
-        flush_buffer()
-
-        if embeddings_list:
-            embed_dim = embeddings_list[0].size(0)
-        else:
-            embed_dim = 1
-
-        embeddings = torch.zeros(
-            len(completions_text),
-            embed_dim,
-            dtype=self.semantic_embedding_dtype,
-        )
-        for idx, vec in zip(indices, embeddings_list):
-            embeddings[idx, : vec.size(0)] = vec
-
-        return embeddings, valid_mask
-
-    def _request_remote_embeddings(
-        self,
-        endpoint: str,
-        headers: dict[str, str],
-        inputs: list[str],
-    ) -> list[list[float]]:
-        payload = {
-            "model": self.semantic_embedding_model,
-            "input": inputs,
-        }
-        try:
-            response = requests.post(
-                endpoint,
-                headers=headers,
-                json=payload,
-                timeout=self.semantic_embedding_timeout,
-            )
-        except requests.RequestException as exc:
-            raise RuntimeError(f"Embedding request failed: {exc}") from exc
-
-        if response.status_code >= 400:
-            raise RuntimeError(
-                f"Embedding request failed with status {response.status_code}: {response.text}"
-            )
-
-        data = response.json()
-        if "data" not in data:
-            raise RuntimeError("Embedding response missing 'data' field.")
-
-        entries = sorted(data["data"], key=lambda item: item.get("index", 0))
-        return [entry["embedding"] for entry in entries]
-
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
@@ -1212,58 +1066,12 @@ class INTUITORTrainer(Trainer):
         # import pdb; pdb.set_trace()
         return bonuses, mean_kl, mean_entropy
 
-    def _compute_tail_repeat_reward(self, completion_ids: torch.Tensor, completion_mask: torch.Tensor) -> Optional[torch.Tensor]:
-        if not self._tail_repeat_enabled:
-            return None
-        device = completion_ids.device
-        penalties = torch.zeros(completion_ids.size(0), device=device, dtype=torch.float32)
-        lengths = completion_mask.sum(dim=1).to(torch.int64)
-        min_run = self.tail_repeat_min_run
-        scale = self.tail_repeat_penalty_scale
 
-        for idx in range(completion_ids.size(0)):
-            seq_len = int(lengths[idx].item())
-            if seq_len <= 0:
-                continue
-            tokens = completion_ids[idx, :seq_len]
-            last_token = tokens[-1]
-            run_length = 1
-            for pos in range(seq_len - 2, -1, -1):
-                if tokens[pos] == last_token:
-                    run_length += 1
-                else:
-                    break
-            excess = run_length - min_run + 1
-            if excess > 0:
-                penalties[idx] = -scale * excess
-        return penalties
+    # def _log_optional_modules(self) -> None:
+    #     """Log which optional components are enabled/disabled for transparency."""
+    #     log_fn = getattr(self.accelerator, "print", print)
+    #     log_fn("[IntuitorTrainer] no optional ref_reward enabled")
 
-    def _log_optional_modules(self) -> None:
-        """Log which optional components are enabled/disabled for transparency."""
-        log_fn = getattr(self.accelerator, "print", print)
-
-        if self._ref_reward_enabled:
-            log_fn(f"[IntuitorTrainer] ref_reward enabled (weight={self.ref_reward_weight:.4f})")
-        else:
-            log_fn("[IntuitorTrainer] ref_reward disabled")
-
-        if self._tail_repeat_enabled:
-            log_fn(
-                "[IntuitorTrainer] tail_repeat_reward enabled "
-                f"(weight={self.tail_repeat_reward_weight:.4f}, min_run={self.tail_repeat_min_run}, "
-                f"penalty_scale={self.tail_repeat_penalty_scale:.4f})"
-            )
-        else:
-            log_fn("[IntuitorTrainer] tail_repeat_reward disabled")
-
-        if self.semantic_similarity_filter_enabled:
-            log_fn(
-                "[IntuitorTrainer] semantic_filter enabled "
-                f"(weight={self.semantic_reward_weight:.4f}, "
-                f"low={self.semantic_similarity_low:.3f}, high={self.semantic_similarity_high:.3f})"
-            )
-        else:
-            log_fn("[IntuitorTrainer] semantic_filter disabled")
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -1478,16 +1286,6 @@ class INTUITORTrainer(Trainer):
                         self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
 
-        ref_logprob_rewards = None
-        if self._ref_reward_enabled and ref_per_token_logps is not None:
-            completion_lengths = completion_mask.sum(dim=1).clamp(min=1).float()
-            ref_logprob_rewards = (
-                (ref_per_token_logps * completion_mask).sum(dim=1) / completion_lengths
-            ).detach()
-        tail_repeat_rewards = self._compute_tail_repeat_reward(completion_ids, completion_mask)
-        if tail_repeat_rewards is not None:
-            tail_repeat_rewards = tail_repeat_rewards.detach()
-
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
@@ -1498,63 +1296,6 @@ class INTUITORTrainer(Trainer):
         else:
             completions = completions_text
 
-        semantic_filter_mask: Optional[torch.Tensor] = None
-        semantic_filter_stats: Optional[dict[str, torch.Tensor]] = None
-        # === 计算当前组内的相似度，判断是否需要过滤 ===
-        if self.semantic_similarity_filter_enabled and len(prompts) % self.num_generations == 0:
-            embeddings = None
-            valid_mask = None
-            try:
-                embeddings, valid_mask = self._compute_completion_embeddings_remote(completions_text, completion_mask)
-            except Exception as exc:
-                warnings.warn(
-                    f"Semantic embedding computation failed with error '{exc}'. "
-                    "Semantic similarity filter will be skipped for this batch."
-                )
-            if embeddings is not None and valid_mask is not None:
-                embeddings_cpu = embeddings.cpu()
-                valid_mask_cpu = valid_mask.cpu()
-                group_count = len(prompts) // self.num_generations
-                embedding_dim = embeddings_cpu.size(-1)
-                group_embeddings = embeddings_cpu.view(group_count, self.num_generations, embedding_dim)
-                group_valid_mask = valid_mask_cpu.view(group_count, self.num_generations)
-                group_mean_similarity = torch.full(
-                    (group_count,), float("nan"), dtype=torch.float32
-                )
-
-                for group_idx in range(group_count):
-                    valid_entries = group_valid_mask[group_idx]
-                    valid_count = int(valid_entries.sum().item())
-                    if valid_count < 2:
-                        continue
-                    valid_embeds = group_embeddings[group_idx][valid_entries].contiguous().to(dtype=torch.float32)
-                    valid_embeds = F.normalize(valid_embeds, p=2, dim=-1)
-                    similarity_matrix = valid_embeds @ valid_embeds.T
-                    triu_idx = torch.triu_indices(valid_count, valid_count, offset=1)
-                    mean_similarity = similarity_matrix[triu_idx[0], triu_idx[1]].mean()
-                    group_mean_similarity[group_idx] = mean_similarity
-
-                group_filter = torch.ones(group_count, dtype=torch.bool)
-                valid_similarity = ~torch.isnan(group_mean_similarity)
-                if self.semantic_similarity_low > 0.0:
-                    group_filter[valid_similarity] &= (
-                        group_mean_similarity[valid_similarity] >= self.semantic_similarity_low
-                    )
-                if self.semantic_similarity_high < 1.0:
-                    group_filter[valid_similarity] &= (
-                        group_mean_similarity[valid_similarity] <= self.semantic_similarity_high
-                    )
-
-                group_filter_device = group_filter.to(device=device)
-                semantic_filter_mask = group_filter_device.repeat_interleave(self.num_generations)
-                semantic_filter_stats = {
-                    "group_mean_similarity": group_mean_similarity.to(device=device), # 平均的相似度
-                    "group_filter": group_filter_device,
-                }
-        if semantic_filter_mask is not None:
-            self.accelerator.wait_for_everyone()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
         # === 逐个 reward func 打分：统一收集模块化模型输出与自定义 callable 返回值，reward_func=accuracy 但是 weights=0 ===
         rewards_per_func = torch.zeros(len(prompts), max(len(self.reward_funcs),1), device=device)
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
@@ -1584,25 +1325,6 @@ class INTUITORTrainer(Trainer):
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
 
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
-        # === 计算得到 semantic_mask_local，别的不管 ===
-        semantic_mask_local = None
-        if semantic_filter_mask is not None:
-            mask = semantic_filter_mask.to(device=device)
-            rewards_per_func = torch.where(mask.unsqueeze(1), rewards_per_func, torch.zeros_like(rewards_per_func))
-            semantic_mask_local = mask.float()
-        filtered_group_ratio = None
-        mean_similarity_stats = None
-        if semantic_filter_stats is not None:
-            group_filter = semantic_filter_stats["group_filter"]    # bool, shape=[num_prompt]
-            total_groups = group_filter.numel()                     # int
-            filtered_groups = (~group_filter).sum().float()         # float，被过滤的组
-            filtered_group_ratio = (filtered_groups, torch.tensor(float(total_groups), device=device))  # 被过滤的组占比
-            valid_means = semantic_filter_stats["group_mean_similarity"][~torch.isnan(
-                semantic_filter_stats["group_mean_similarity"]
-            )]
-            if valid_means.numel() > 0:
-                mean_similarity_stats = valid_means
-
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
             nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
@@ -1618,23 +1340,7 @@ class INTUITORTrainer(Trainer):
         rewards_per_func = gather(rewards_per_func)
         gathered_kl_rewards_raw = gather(kl_rewards).reshape(-1)    # 将所有gpu的kl_reward聚集到一起，例如单卡kl_rewards.shape=[6]，那么gathered_kl_rewards.shape=[12]
         gathered_entropies = gather(completion_entropies).reshape(-1)
-        if ref_logprob_rewards is not None:
-            gathered_ref_rewards = gather(ref_logprob_rewards)
-            ref_rewards_for_logging = gathered_ref_rewards.detach().cpu().tolist()
-        else:
-            gathered_ref_rewards = None
-            ref_rewards_for_logging = None
-        if tail_repeat_rewards is not None:
-            gathered_tail_repeat_rewards = gather(tail_repeat_rewards)
-            tail_repeat_rewards_for_logging = gathered_tail_repeat_rewards.detach().cpu().tolist()
-        else:
-            gathered_tail_repeat_rewards = None
-            tail_repeat_rewards_for_logging = None
-        if semantic_mask_local is not None:
-            semantic_mask_all = gather(semantic_mask_local).to(device=device)
-        else:
-            semantic_mask_all = None
-        # === 将原始的kl_rewards的mean和std记录下来（不再使用多样性bonus） ===
+        # === 目的是得到raw_kl_rewards的mean_record和std_record，记录到wandb上面（不再使用多样性bonus） ===
         raw_kl_rewards_by_prompt = gathered_kl_rewards_raw.view(-1, self.num_generations)
         kl_diversity_stats = None
         raw_mean_kl_rewards = raw_kl_rewards_by_prompt.mean(dim=1)
@@ -1687,63 +1393,8 @@ class INTUITORTrainer(Trainer):
             self.accelerator.process_index * len(prompts),
             (self.accelerator.process_index + 1) * len(prompts),
         )
-        reward_advantages_all = advantages.detach().clone() # 在切片前先备份 reward 端优势，方便后续做全局日志
         advantages = advantages[process_slice]
-        # === 语义相似度过滤：语义相似度在范围之外的prompt，通过mask，将其advantage设置为0，不参与损失计算 ===
-        if semantic_mask_all is not None:
-            semantic_mask_local_slice = semantic_mask_all[process_slice]
-        else:
-            semantic_mask_local_slice = None
-        # === Reference rewards：按 prompt 组统计并换算为优势 ===
-        ref_reward_record = None
-        ref_reward_std_record = None
-        if gathered_ref_rewards is not None:
-            ref_rewards_grouped = gathered_ref_rewards.view(-1, self.num_generations)
-            mean_ref_rewards = ref_rewards_grouped.mean(dim=1)
-            std_ref_rewards = ref_rewards_grouped.std(dim=1)
-            ref_reward_record = mean_ref_rewards.mean().item()
-            ref_reward_std_record = std_ref_rewards.mean().item()
-            mean_ref_rewards = mean_ref_rewards.repeat_interleave(self.num_generations, dim=0)
-            std_ref_rewards = std_ref_rewards.repeat_interleave(self.num_generations, dim=0)
-            mean_ref_rewards_all = mean_ref_rewards.detach().clone()
-            std_ref_rewards_all = std_ref_rewards.detach().clone()
-            mean_ref_rewards_local = mean_ref_rewards[process_slice]
-            std_ref_rewards_local = std_ref_rewards[process_slice]
-            ref_advantage = (ref_logprob_rewards - mean_ref_rewards_local) / (std_ref_rewards_local + 1e-4)
-            ref_advantage = ref_advantage * self.ref_reward_weight
-            gathered_ref_rewards_flat = gathered_ref_rewards.view(-1)
-            ref_advantages_all = (gathered_ref_rewards_flat - mean_ref_rewards_all) / (std_ref_rewards_all + 1e-4)
-            ref_advantages_all = ref_advantages_all * self.ref_reward_weight
-        else:
-            ref_advantage = torch.zeros_like(kl_rewards)
-            ref_advantages_all = torch.zeros_like(reward_advantages_all)
-
-        # === Tail-repeat rewards：检测重复片段并生成奖励分布 ===
-        tail_repeat_reward_record = None
-        tail_repeat_reward_std_record = None
-        if gathered_tail_repeat_rewards is not None:
-            tail_repeat_grouped = gathered_tail_repeat_rewards.view(-1, self.num_generations)
-            mean_tail_repeat = tail_repeat_grouped.mean(dim=1)
-            std_tail_repeat = tail_repeat_grouped.std(dim=1)
-            tail_repeat_reward_record = mean_tail_repeat.mean().item()
-            tail_repeat_reward_std_record = std_tail_repeat.mean().item()
-            mean_tail_repeat = mean_tail_repeat.repeat_interleave(self.num_generations, dim=0)
-            std_tail_repeat = std_tail_repeat.repeat_interleave(self.num_generations, dim=0)
-            mean_tail_repeat_all = mean_tail_repeat.detach().clone()
-            std_tail_repeat_all = std_tail_repeat.detach().clone()
-            mean_tail_repeat_local = mean_tail_repeat[process_slice]
-            std_tail_repeat_local = std_tail_repeat[process_slice]
-            tail_repeat_advantage = (tail_repeat_rewards - mean_tail_repeat_local) / (std_tail_repeat_local + 1e-4)
-            tail_repeat_advantage = tail_repeat_advantage * self.tail_repeat_reward_weight
-            tail_repeat_advantages_all = (gathered_tail_repeat_rewards.view(-1) - mean_tail_repeat_all) / (
-                std_tail_repeat_all + 1e-4
-            )
-            tail_repeat_advantages_all = tail_repeat_advantages_all * self.tail_repeat_reward_weight
-        else:
-            tail_repeat_advantage = torch.zeros_like(kl_rewards)
-            tail_repeat_advantages_all = torch.zeros_like(reward_advantages_all)
-
-        # === KL rewards：将gathered_kl_rewards按照prompt划分，计算组内mean和std，便于计算优势 ===
+        # === 归一化之后的 KL rewards：将gathered_kl_rewards按照prompt划分，计算组内mean和std，便于计算优势 ===
         gathered_kl_rewards = gathered_kl_rewards.view(-1, self.num_generations)    # (num_prompt, num_generations)
         mean_kl_rewards = gathered_kl_rewards.mean(dim=1)   # (num_prompt) 每个 prompt 小组内部做均值
         std_kl_rewards = gathered_kl_rewards.std(dim=1)
@@ -1753,23 +1404,13 @@ class INTUITORTrainer(Trainer):
         mean_kl_rewards = mean_kl_rewards.repeat_interleave(self.num_generations, dim=0) # 会将每个元素重复 num_generations 次（num_prompt*num_generations）。如果 mean_kl_rewards = [0.5, 0.3, 0.8] 且 num_generations = 4，结果将是 [0.5, 0.5, 0.5, 0.5, 0.3, 0.3, 0.3, 0.3, 0.8, 0.8, 0.8, 0.8]
         std_kl_rewards = std_kl_rewards.repeat_interleave(self.num_generations, dim=0)
 
-        # === 记录当前 step 的 kl_reward的mean和std ===
-        mean_kl_rewards_all = mean_kl_rewards.detach().clone()
-        std_kl_rewards_all = std_kl_rewards.detach().clone()
 
         # === process_slice 获取当前 gpu 上的样本索引范围，计算当前 gpu 的 advantages ===
         kl_rewards = kl_rewards_norm_flat[process_slice]    # kl_rewards_norm_flat是归一化之后的shape=[num_prompt*num_generation]，使用[process_slice]切出当前gpu的部分，用于计算优势
         mean_kl_rewards = mean_kl_rewards[process_slice]
         std_kl_rewards = std_kl_rewards[process_slice]
         kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)        # 逐个元素相减，计算 KL 奖励的优势
-        if semantic_mask_local_slice is not None:
-            advantages = advantages * semantic_mask_local_slice
-            kl_advantage = kl_advantage * semantic_mask_local_slice
-            ref_advantage = ref_advantage * semantic_mask_local_slice
-            tail_repeat_advantage = tail_repeat_advantage * semantic_mask_local_slice
-        total_advantage = kl_advantage + advantages + ref_advantage + tail_repeat_advantage
-        if semantic_mask_local_slice is not None:
-            total_advantage = total_advantage * semantic_mask_local_slice
+        total_advantage = kl_advantage + advantages
         # if self.accelerator.process_index == 0:  # 或其它 rank
         #     import pdb; pdb.set_trace()
         # Log the metrics
@@ -1795,20 +1436,6 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_mask.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_mask.float().max().item())
 
-        if filtered_group_ratio is not None:
-            local_filtered, local_total = filtered_group_ratio
-            gathered_filtered = self.accelerator.gather_for_metrics(local_filtered)
-            gathered_total = self.accelerator.gather_for_metrics(local_total)
-            total_groups = gathered_total.sum().item()
-            filtered_groups = gathered_filtered.sum().item()
-            ratio = filtered_groups / total_groups if total_groups > 0 else 0.0
-            self._metrics[mode]["semantic/filtered_ratio"].append(ratio)
-        if mean_similarity_stats is not None and mean_similarity_stats.numel() > 0:
-            gathered_similarity = self.accelerator.gather_for_metrics(mean_similarity_stats)
-            self._metrics[mode]["semantic/mean_similarity"].append(gathered_similarity.nanmean().item())
-            self._metrics[mode]["semantic/min_similarity"].append(nanmin(gathered_similarity).item())
-            self._metrics[mode]["semantic/max_similarity"].append(nanmax(gathered_similarity).item())
-
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
@@ -1827,22 +1454,8 @@ class INTUITORTrainer(Trainer):
             kl_divergence_record, kl_entropy_record = kl_diversity_stats
             self._metrics[mode]["rewards/kl_reward_diversity/kl"].append(kl_divergence_record)
             self._metrics[mode]["rewards/kl_reward_diversity/entropy"].append(kl_entropy_record)
-        if ref_reward_record is not None:
-            self._metrics[mode]["rewards/ref_logprob/mean"].append(ref_reward_record)
-            self._metrics[mode]["rewards/ref_logprob/std"].append(ref_reward_std_record)
-        if tail_repeat_reward_record is not None:
-            self._metrics[mode]["rewards/tail_repeat/mean"].append(tail_repeat_reward_record)
-            self._metrics[mode]["rewards/tail_repeat/std"].append(tail_repeat_reward_std_record)
         # 监测 kl 的 advantage的平均值，为0才正常
         self._metrics[mode]["advantages/kl_mean_advantage"].append(self.accelerator.gather_for_metrics(kl_advantage).nanmean().item())
-        if gathered_ref_rewards is not None:
-            self._metrics[mode]["advantages/ref_mean_advantage"].append(
-                self.accelerator.gather_for_metrics(ref_advantage).nanmean().item()
-            )
-        if gathered_tail_repeat_rewards is not None:
-            self._metrics[mode]["advantages/tail_repeat_mean_advantage"].append(
-                self.accelerator.gather_for_metrics(tail_repeat_advantage).nanmean().item()
-            )
         self._metrics[mode]["advantages/total_mean_advantage"].append(self.accelerator.gather_for_metrics(total_advantage).nanmean().item())
         # Log prompt and completion texts
         gathered_prompts = gather_object(prompts_text)
@@ -1853,40 +1466,9 @@ class INTUITORTrainer(Trainer):
         if mode == "train" and self.kl_reward_plot_enabled:
             self._kl_plot_buffer["prompt"].extend(gathered_prompts)
             self._kl_plot_buffer["kl_reward_norm"].extend(kl_rewards_norm_for_logging)
-            if ref_rewards_for_logging is not None:
-                self._kl_plot_buffer["ref_reward"].extend(ref_rewards_for_logging)
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
-        # self._textual_logs["rewards"]["kl_reward"].extend(kl_rewards_for_logging)
 
-
-        # 记录 KL/Total 的优势项到 textual_logs（全局对齐，支持多卡）：
-        # 使用 gather 后的全局 KL 奖励与对应均值/方差，得到每个 completion 的 KL 优势
-        gathered_kl_rewards_flat = gathered_kl_rewards.reshape(-1)
-        kl_advantages_all = (gathered_kl_rewards_flat - mean_kl_rewards_all) / (std_kl_rewards_all + 1e-4)
-        if semantic_mask_all is not None:
-            kl_advantages_all = kl_advantages_all * semantic_mask_all
-            reward_advantages_all = reward_advantages_all * semantic_mask_all
-        if ref_advantages_all is not None and semantic_mask_all is not None:
-            ref_advantages_all = ref_advantages_all * semantic_mask_all
-        if tail_repeat_advantages_all is not None and semantic_mask_all is not None:
-            tail_repeat_advantages_all = tail_repeat_advantages_all * semantic_mask_all
-        # total 优势 = KL 优势 +（任务奖励优势，已在切片前缓存为 reward_advantages_all）
-        total_advantages_all = reward_advantages_all + kl_advantages_all + ref_advantages_all
-        if tail_repeat_advantages_all is not None:
-            total_advantages_all = total_advantages_all + tail_repeat_advantages_all
-        if semantic_mask_all is not None:
-            total_advantages_all = total_advantages_all * semantic_mask_all
-        # self._textual_logs["rewards"]["kl_advantage"].extend(kl_advantages_all.detach().cpu().tolist())
-        # if ref_advantages_all is not None:
-        #     self._textual_logs["rewards"]["ref_logprob_advantage"].extend(
-        #         ref_advantages_all.detach().cpu().tolist()
-        #     )
-        # if tail_repeat_advantages_all is not None:
-        #     self._textual_logs["rewards"]["tail_repeat_advantage"].extend(
-        #         tail_repeat_advantages_all.detach().cpu().tolist()
-        #     )
-        # self._textual_logs["rewards"]["total_advantage"].extend(total_advantages_all.detach().cpu().tolist())
 
         return {
             "prompt_ids": prompt_ids,
@@ -2122,8 +1704,6 @@ class INTUITORTrainer(Trainer):
 
         prompts = list(self._kl_plot_buffer["prompt"])
         kl_rewards_norm = list(self._kl_plot_buffer["kl_reward_norm"])
-        ref_rewards = list(self._kl_plot_buffer["ref_reward"])
-
         try:
             if kl_rewards_norm:
                 if len(prompts) != len(kl_rewards_norm):
@@ -2135,17 +1715,6 @@ class INTUITORTrainer(Trainer):
                         kl_rewards_norm,
                         metric_label="KL Reward (normalized)",
                         file_prefix="kl_reward",
-                    )
-            if ref_rewards:
-                if len(prompts) != len(ref_rewards):
-                    warnings.warn("Prompt/ref buffer size mismatch; skipping ref reward plot for this step.")
-                else:
-                    self._save_reward_heatmap(
-                        step,
-                        prompts,
-                        ref_rewards,
-                        metric_label="Ref Logprob Reward",
-                        file_prefix="ref_reward",
                     )
             self._last_kl_plot_step = step
         except Exception as exc:  # pragma: no cover - best-effort plotting
