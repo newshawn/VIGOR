@@ -5,3 +5,4 @@ run_intuitor.log
 *.log
 logs/
 det_yaml/
+.venv_lighteval/

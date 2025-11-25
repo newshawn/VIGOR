@@ -33,9 +33,41 @@ from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
 from trl import ModelConfig, TrlParser, get_peft_config
 from open_r1.intuitor_trainer import INTUITORTrainer
+try:
+    import git  # type: ignore
+except ImportError:
+    git = None
 
 
 logger = logging.getLogger(__name__)
+
+
+def check_repo_cleanliness(strict: bool = True) -> None:
+    """
+    在正式跑训练前检查代码是否 dirty。
+    """
+    if git is None:
+        print("⚠️ 警告：未安装 GitPython，跳过代码洁净检查。")
+        return
+    try:
+        repo = git.Repo(search_parent_directories=True)
+    except Exception:
+        print("⚠️ 警告：当前目录不是 Git 仓库，跳过代码洁净检查。")
+        return
+    if repo.is_dirty(untracked_files=True):
+        warnings = [
+            "❌ 错误：检测到未提交的代码修改。正式实验请先 Commit 代码！",
+            "❌ 提示：wandb 记录的代码版本会与当前运行不一致，后续难以回溯。",
+            "❌ 建议：先 git status / git diff 检查改动，再 git commit 后重试。",
+        ]
+        for line in warnings:
+            print(line)
+        if strict:
+            sys.exit(1)
+        else:
+            print("⚠️ 警告：代码库处于 Dirty 状态，仅用于调试。")
+    else:
+        print("✅ 代码库干净，可继续运行。")
 
 
 def main(script_args, training_args, model_args):
@@ -56,6 +88,12 @@ def main(script_args, training_args, model_args):
     transformers.utils.logging.set_verbosity(log_level)
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
+    if getattr(training_args, "local_rank", -1) in (-1, 0):
+        skip_strict = os.environ.get("INTUITOR_SKIP_GIT_CHECK", "")
+        strict_mode = str(skip_strict).lower() not in {"1", "true", "yes", "y"}
+        if not strict_mode:
+            print("⚠️ 调试模式：跳过严格的 Git 洁净检查（仅输出警告）。")
+        check_repo_cleanliness(strict=strict_mode)
 
     # Log on each process a small summary
     logger.warning(

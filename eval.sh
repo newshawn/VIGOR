@@ -1,12 +1,14 @@
 #!/bin/bash
 
 # 用法：
-#   ./eval.sh <model_path1> [model_path2 ...]
-# 若不传参数，则使用脚本内的默认 MODEL 路径。
+#   ./eval_local.sh <path1> [path2 ...]
+# path 可以是具体 checkpoint 目录，也可以是父目录；父目录下凡是包含
+# "checkpoint-" 的子目录都会自动加入评测列表。若不传参数，则使用脚本内
+# 的默认 MODEL 路径（或 MODELS 数组）。
 
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
-source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4
+source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/.venv_lighteval/bin/activate
+export CUDA_VISIBLE_DEVICES=0
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 # 确保 HF 本地缓存与离线模式（集群/无网环境使用本地缓存）
@@ -18,10 +20,11 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 export HF_DATASETS_CACHE="/run/determined/NAS1/public/xuexiang/light_eval"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
+export HF_HUB_DISABLE_XET=1  # 避免 xet 后端在无代理/内网环境访问 cas-server 失败
 mkdir -p "$HF_DATASETS_CACHE" "$HF_HUB_CACHE"
 
 # 在线/离线开关（默认在线以便必要时下载到上面路径；设置 EVAL_ONLINE=0 可强制离线）
-EVAL_ONLINE=${EVAL_ONLINE:-1}
+EVAL_ONLINE=0
 if [[ "$EVAL_ONLINE" == "1" ]]; then
   export TRANSFORMERS_OFFLINE=0
   export HF_HUB_OFFLINE=0
@@ -52,47 +55,10 @@ DEFAULT_MODEL=/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuito
 #   "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-grpo-3B_20251014_152032/checkpoint-40/"
 # )
 MODELS=(
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-5"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-10"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-15"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-20"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-25"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-30"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-35"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-40"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-45"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_062756/ckpt/checkpoint-50"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-5"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-10"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-15"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-20"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-25"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-30"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-35"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-40"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-45"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053042/checkpoint-50"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-5"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-10"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-15"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-20"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-25"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-30"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-35"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-40"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-45"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251121_053000/checkpoint-50"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-10"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-20"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-30"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-40"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-50"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251111_051325/checkpoint-60"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251120_072958/ckpt/checkpoint-10"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251120_072958/ckpt/checkpoint-20"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251120_072958/ckpt/checkpoint-30"
-"/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251120_072958/ckpt/checkpoint-40"
+  # "/home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/Qwen2.5-Intuitor-3B"    # 会自动加入该目录下所有 checkpoint-*
+  "/run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B" # 也可填具体 checkpoint
 )
+
 
 # 允许通过环境变量传参（便于集群作业/自动化脚本）
 #   MODEL_PATH=<单个模型>
@@ -113,14 +79,65 @@ if [[ "$#" -gt 0 ]]; then
   INPUT_MODELS+=("$@")
 fi
 
-# 收集待评测的模型列表：优先使用外部传参；否则使用上方 MODELS；再否则用 DEFAULT_MODEL
+# 收集原始候选路径：优先使用外部传参；否则使用 MODELS；再否则用 DEFAULT_MODEL
+declare -a RAW_MODEL_PATHS=()
 if [ ${#INPUT_MODELS[@]} -gt 0 ]; then
-  MODELS_TO_RUN=("${INPUT_MODELS[@]}")
+  RAW_MODEL_PATHS=("${INPUT_MODELS[@]}")
 elif [ ${#MODELS[@]} -gt 0 ]; then
-  MODELS_TO_RUN=("${MODELS[@]}")
+  RAW_MODEL_PATHS=("${MODELS[@]}")
 else
-  MODELS_TO_RUN=("$DEFAULT_MODEL")
+  RAW_MODEL_PATHS=("$DEFAULT_MODEL")
 fi
+
+# 将父目录展开为包含 "checkpoint-" 的子目录；如果自身就是 checkpoint 目录也保留
+expand_checkpoints() {
+  local path="$1"
+  local -n _out_ref="$2"
+  [[ -z "$path" ]] && return
+
+  local trimmed="${path%/}"
+  if [[ -d "$trimmed" ]]; then
+    local added=0
+    # 如果目录本身就是 checkpoint 目录，直接加入
+    if [[ "$(basename "$trimmed")" == *checkpoint-* ]]; then
+      _out_ref+=("$trimmed")
+      added=1
+    fi
+    # 搜索一层子目录中包含 checkpoint- 的目录
+    while IFS= read -r -d '' subdir; do
+      _out_ref+=("${subdir%/}")
+      added=1
+    done < <(find "$trimmed" -maxdepth 1 -mindepth 1 -type d -name '*checkpoint-*' -print0)
+    # 如果没找到 checkpoint-* 子目录，把原始目录也加入（兼容 HF 根目录）
+    if [[ $added -eq 0 ]]; then
+      _out_ref+=("$trimmed")
+    fi
+  else
+    # 非目录：按原样加入（可能是具体模型路径或将被后续过滤）
+    _out_ref+=("$trimmed")
+  fi
+}
+
+declare -a EXPANDED_MODELS=()
+for cand in "${RAW_MODEL_PATHS[@]}"; do
+  expand_checkpoints "$cand" EXPANDED_MODELS
+done
+
+# 去重并过滤不存在的路径
+declare -A __SEEN_MODELS=()
+MODELS_TO_RUN=()
+for model in "${EXPANDED_MODELS[@]}"; do
+  [[ -z "$model" ]] && continue
+  if [[ -n "${__SEEN_MODELS[$model]:-}" ]]; then
+    continue
+  fi
+  __SEEN_MODELS[$model]=1
+  if [[ -d "$model" ]]; then
+    MODELS_TO_RUN+=("$model")
+  else
+    echo "⚠️ 模型路径不存在，已跳过：$model" >&2
+  fi
+done
 
 # 调试：打印本次将要评测的模型列表
 echo "=== 将评测以下模型（${#MODELS_TO_RUN[@]}） ==="
@@ -135,6 +152,9 @@ TIMESTAMP=$(date -d "+8 hour" +"%Y%m%d_%H%M%S")
 
 # 需要评测的任务列表
 TASKS=(
+  "extended|lcb:codegeneration_release_v6"
+  "mmlu_pro"
+  "gsm8k"
   "math_500"
   # 如需开启其它任务，取消注释并添加到数组：
   # "gpqa:diamond"
@@ -175,8 +195,8 @@ run_single_model() {
     export EVAL_GREEDY_DECODE=0
   fi
 
-  local OUTPUT_DIR="data/evals/$MODEL_NAME"
-  local LOG_DIR="$OUTPUT_DIR/logs/$TIMESTAMP"
+  local OUTPUT_DIR="$PWD/data/evals/$MODEL_NAME"
+  local LOG_DIR="$OUTPUT_DIR/logs"
   mkdir -p "$LOG_DIR"
 
   echo "[GPU $GPU_LABEL] === 评估参数 ==="
@@ -209,18 +229,17 @@ run_single_model() {
   for TASK in "${TASKS[@]}"; do
     echo "[GPU $GPU_LABEL] === 开始 $TASK ==="
 
-    local logfile
+    # 默认 0-shot（mmlu_pro 也使用 0-shot）
+    local FEW_SHOT=0
+
+    local logfile_task="${TASK//\//_}"
+    local logfile="$LOG_DIR/${logfile_task}_${TIMESTAMP}.log"
     # 对于 LiveCodeBench 扩展语法示例（以 extended| 前缀区分），否则默认使用 lighteval 套件名
     if [[ "$TASK" == extended\|* ]]; then
-      # 扩展示例：TASK 字符串已经包含完整的套件标识
-      logfile="$LOG_DIR/${TASK//\//_}.log"
-      lighteval vllm "$MODEL_ARGS" "$TASK|0|0" \
-        --use-chat-template \
+      lighteval vllm "$MODEL_ARGS" "$TASK|$FEW_SHOT" \
         --output-dir "$OUTPUT_DIR" > "$logfile" 2>&1
     else
-      logfile="$LOG_DIR/$TASK.log"
-      lighteval vllm "$MODEL_ARGS" "lighteval|$TASK|0|0" \
-        --use-chat-template \
+      lighteval vllm "$MODEL_ARGS" "lighteval|$TASK|$FEW_SHOT" \
         --output-dir "$OUTPUT_DIR" > "$logfile" 2>&1
     fi
     local status=$?
