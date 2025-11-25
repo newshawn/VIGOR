@@ -1354,24 +1354,21 @@ class INTUITORTrainer(Trainer):
             float(gathered_entropies.std(unbiased=False).item()) if gathered_entropies.numel() > 0 else float("nan")
         )
 
-        # === 分桶（分位数）KL 奖励：按每个 prompt 的梯度范数分位切分，映射到离散档位 ===
-        grad_norms_by_prompt = (-raw_kl_rewards_by_prompt).clamp_min(0.0)  # [num_prompt, num_generations]
-        quantile_levels = torch.tensor([0.2, 0.4, 0.6, 0.8], device=grad_norms_by_prompt.device)
-        quantiles = torch.quantile(grad_norms_by_prompt, quantile_levels, dim=1, keepdim=False)  # [4, num_prompt]
-        quantiles = quantiles.transpose(0, 1)  # [num_prompt, 4]
-        q20, q40, q60, q80 = [quantiles[:, i].unsqueeze(1) for i in range(4)]
+        # === KL 奖励归一：按每个 prompt 内 raw_kl（数值越大代表梯度越小、奖励越高）做 rank，映射到 [-1, 1] ===
+        # raw_kl_rewards_by_prompt 为负数，绝对值越小（越靠近 0）表示梯度越小 → 奖励越高
+        # 按 raw 值升序排序：最负的 rank 最低，最接近 0 的 rank 最高
+        rank_idx = raw_kl_rewards_by_prompt.argsort(dim=1, stable=True)
+        ranks = rank_idx.argsort(dim=1, stable=True).float()  # [num_prompt, num_generations] 数值越大越“好”
+        if self.num_generations > 1:
+            ranks = (ranks / (self.num_generations - 1)) * 2.0 - 1.0
+        else:
+            ranks = torch.zeros_like(ranks)
 
-        kl_buckets = torch.zeros_like(grad_norms_by_prompt)
-        kl_buckets = torch.where(grad_norms_by_prompt <= q20, 2.0, kl_buckets)
-        kl_buckets = torch.where((grad_norms_by_prompt > q20) & (grad_norms_by_prompt <= q40), 1.0, kl_buckets)
-        kl_buckets = torch.where((grad_norms_by_prompt > q40) & (grad_norms_by_prompt <= q60), 0.0, kl_buckets)
-        kl_buckets = torch.where((grad_norms_by_prompt > q60) & (grad_norms_by_prompt <= q80), -1.0, kl_buckets)
-        kl_buckets = torch.where(grad_norms_by_prompt > q80, -2.0, kl_buckets)
-
-        kl_rewards_norm_flat = kl_buckets.reshape(-1)  # shape=[num_prompt*num_generations*num_device]
+        kl_rewards_norm_flat = ranks.reshape(-1)  # shape=[num_prompt*num_generations*num_device]
         gathered_kl_rewards = kl_rewards_norm_flat
+        # if self.accelerator.process_index == 0:  # 或其它 rank
+        #     import pdb; pdb.set_trace()
         kl_rewards_norm_for_logging = kl_rewards_norm_flat.detach().cpu().tolist()  # 保存离散化后的 KL 奖励用于文本日志
-        # import pdb; pdb.set_trace()
         # === 任务奖励聚合与优势计算（这里只有accuracy_reward，weight=0，不用于优化） ===    
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
