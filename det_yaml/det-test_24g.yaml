@@ -40,4 +40,15 @@ searcher:
 profiling:
   enabled: true
 
-entrypoint: /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/training_scripts/run_1_5_debug_single_gpu.sh
+# 在容器内先启动 clash (mihomo)，再运行原训练脚本；端口 18082 供 http/https 代理
+entrypoint: >
+  bash -lc "
+    clash on
+    export http_proxy=http://127.0.0.1:18082
+    export https_proxy=$http_proxy
+    export HTTP_PROXY=$http_proxy
+    export HTTPS_PROXY=$https_proxy
+    export no_proxy='127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local'
+    export NO_PROXY=$no_proxy
+    exec /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/training_scripts/run_1_5_debug_single_gpu.sh
+  "

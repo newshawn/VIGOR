@@ -8,7 +8,7 @@
 
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/.venv_lighteval/bin/activate
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 # 确保 HF 本地缓存与离线模式（集群/无网环境使用本地缓存）
@@ -55,8 +55,9 @@ DEFAULT_MODEL=/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuito
 #   "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-grpo-3B_20251014_152032/checkpoint-40/"
 # )
 MODELS=(
-  # "/home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/Qwen2.5-Intuitor-3B"    # 会自动加入该目录下所有 checkpoint-*
-  "/run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B" # 也可填具体 checkpoint
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-120"    # 会自动加入该目录下所有 checkpoint-*
+  # "/run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B" # 也可填具体 checkpoint
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-110"
 )
 
 
@@ -152,8 +153,8 @@ TIMESTAMP=$(date -d "+8 hour" +"%Y%m%d_%H%M%S")
 
 # 需要评测的任务列表
 TASKS=(
-  "extended|lcb:codegeneration_release_v6"
-  "mmlu_pro"
+  # "extended|lcb:codegeneration_release_v6"
+  # "mmlu_pro"
   "gsm8k"
   "math_500"
   # 如需开启其它任务，取消注释并添加到数组：

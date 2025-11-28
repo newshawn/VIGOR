@@ -61,90 +61,33 @@ class GRPOConfig(trl.GRPOConfig):
         default=1e-8,
         metadata={"help": "Minimum probability clamp inside diversity bonus to avoid log underflow."},
     )
+    kl_entropy_focal_lambda: float = field(
+        default=-0.5,
+        metadata={
+            "help": "Exponent lambda for entropy-based focal scaling of KL reward: weight=(1 - H_avg)^lambda. "
+            "Use negative values to penalize over-confident (low-entropy) completions."
+        },
+    )
+    kl_entropy_focal_warmup_ratio: float = field(
+        default=0,
+        metadata={
+            "help": "Warmup ratio for entropy focal lambda. Keeps lambda at 0 for the first warmup_ratio of steps before"
+            " decaying to kl_entropy_focal_lambda."
+        },
+    )
+    kl_entropy_focal_metric: str = field(
+        default="entropy",
+        metadata={
+            "help": "Base metric for focal scaling: 'entropy' uses H, 'p_norm' uses (1 - p_norm)."
+        },
+    )
     kl_entropy_weighting_enabled: bool = field(
         default=True,
         metadata={
-            "help": "If True, reweight KL rewards by completion entropy (higher entropy => smaller magnitude, closer to 0)."
+            "help": "If True, apply entropy-based focal scaling to KL rewards."
         },
     )
-    kl_entropy_weighting_target: float = field(
-        default=0.15,
-        metadata={
-            "help": "Target completion entropy used to scale weights. Effective weight is target/entropy, clipped by the bounds."
-        },
-    )
-    kl_entropy_weighting_min: float = field(
-        default=0.5,
-        metadata={"help": "Lower bound for entropy-based KL reward weights."},
-    )
-    kl_entropy_weighting_max: float = field(
-        default=2.0,
-        metadata={"help": "Upper bound for entropy-based KL reward weights."},
-    )
-    ref_reward_weight: float = field(
-        default=0.0,
-        metadata={
-            "help": "Weight applied to the reference-model log-probability reward (negative perplexity). Set to 0 to disable."
-        },
-    )
-    tail_repeat_reward_weight: float = field(
-        default=0.0,
-        metadata={
-            "help": "Weight applied to the tail repetition penalty reward. Positive values penalize long repeated tokens."
-        },
-    )
-    tail_repeat_min_run: int = field(
-        default=4,
-        metadata={"help": "Minimum tail run length before the repetition penalty activates."},
-    )
-    tail_repeat_penalty_scale: float = field(
-        default=1.0,
-        metadata={"help": "Linear scale applied to the tail repetition penalty once the min run is exceeded."},
-    )
-    semantic_reward_weight: float = field(
-        default=0.0,
-        metadata={"help": "Weight applied to the semantic regularizer. Set to 0.0 to disable."},
-    )
-    semantic_similarity_low: float = field(
-        default=0.0,
-        metadata={"help": "Lower bound for mean pairwise similarity. Prompts below this will be filtered."},
-    )
-    semantic_similarity_high: float = field(
-        default=1.00,
-        metadata={"help": "Upper bound for mean pairwise similarity. Prompts above this will be filtered."},
-    )
-    semantic_embedding_api_base: Optional[str] = field(
-        default="https://api.siliconflow.cn/v1",
-        metadata={
-            "help": "Base URL of the external embedding service. Defaults to SiliconFlow when unset."
-        },
-    )
-    semantic_embedding_api_key: Optional[str] = field(
-        default="sk-pkkoqekaidbszexjuwchtvgybvllcftpdxbfdydwzezyklxi",
-        metadata={
-            "help": "API key used for the embedding service. Falls back to environment variable "
-            "'SEMANTIC_EMBEDDING_API_KEY'."
-        },
-    )
-    semantic_embedding_model: str = field(
-        default="Qwen/Qwen3-Embedding-4B",
-        metadata={"help": "Embedding model identifier requested from the external service."},
-    )
-    semantic_embedding_timeout: float = field(
-        default=30.0,
-        metadata={"help": "Timeout (seconds) for each embedding API call."},
-    )
-    semantic_embedding_batch_size: int = field(
-        default=16,
-        metadata={"help": "Maximum number of texts sent per embedding API request."},
-    )
-    semantic_embedding_dtype: str = field(
-        default="float16",
-        metadata={
-            "help": "Torch dtype used to store semantic embeddings. "
-            "Supported: 'float16', 'bfloat16', 'float32'. Lower dtypes reduce memory."
-        },
-    )
+
     hub_model_revision: Optional[str] = field(
         default="main", metadata={"help": "The Hub model branch to push the model to."}
     )
