@@ -23,6 +23,7 @@ export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_ENTITY=w597744907-zhejiang-university
 export WANDB_MODE=online
 export WANDB_DISABLED=false
+export INTUITOR_ENABLE_WANDB_GIT_PATCH=1  # upload current git diff via wandb.save_git_patch()
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export CUDA_VISIBLE_DEVICES=0
@@ -40,7 +41,7 @@ EXP_TYPE=intuitor              # 可选值: intuitor 或 grpo
 MAX_STEPS=50                   # debug 下默认 50 步
 
 # 续跑时手动填：把上次 run 的时间戳/ID 填到下一行和 WANDB_RUN_ID，再把 RESUME_MODE 设为 true
-RESUME_MODE=true              # true: 续跑；false: 新跑
+RESUME_MODE=false              # true: 续跑；false: 新跑
 RESUME_TIMESTAMP=20251128-043845
 export WANDB_RUN_ID=8txj3olh
 export WANDB_RESUME=allow
@@ -106,10 +107,6 @@ mkdir -p "$LOG_DIR" "$OUTPUT_DIR"
 
 # 将后续输出同时写入终端与日志文件
 exec > >(tee "$RUN_LOG_FILE") 2>&1
-
-# 网络连通性自检（不会中断脚本）
-echo "[CHECK] curl -I http://google.com"
-curl -I -s http://google.com || echo "[WARN] curl google.com failed (ignored)"
 
 
 # 显示/记录当前配置参数

@@ -45,27 +45,17 @@ class GRPOConfig(trl.GRPOConfig):
             "help": "Step size eta used for the KL-based reward approximation. Defaults to learning_rate when unset."
         },
     )
-    kl_reward_diversity_weight: float = field(
-        default=0.3,
-        metadata={
-            "help": "Weight for the KL reward diversity bonus (log-ratio vs uniform). Set to 0 to disable."
-        },
-    )
-    kl_reward_diversity_temperature: float = field(
-        default=1,
-        metadata={
-            "help": "Temperature for softmax over per-prompt KL rewards when computing diversity bonus. Lower is sharper."
-        },
-    )
-    kl_reward_diversity_epsilon: float = field(
-        default=1e-8,
-        metadata={"help": "Minimum probability clamp inside diversity bonus to avoid log underflow."},
-    )
     kl_entropy_focal_lambda: float = field(
         default=-0.5,
         metadata={
             "help": "Exponent lambda for entropy-based focal scaling of KL reward: weight=(1 - H_avg)^lambda. "
             "Use negative values to penalize over-confident (low-entropy) completions."
+        },
+    )
+    kl_entropy_pnorm_target: float = field(
+        default=0.9,
+        metadata={
+            "help": "For focal_metric='p_norm', only down-weight completions whose p_norm exceeds this target."
         },
     )
     kl_entropy_focal_warmup_ratio: float = field(
@@ -76,7 +66,7 @@ class GRPOConfig(trl.GRPOConfig):
         },
     )
     kl_entropy_focal_metric: str = field(
-        default="entropy",
+        default="p_norm",
         metadata={
             "help": "Base metric for focal scaling: 'entropy' uses H, 'p_norm' uses (1 - p_norm)."
         },

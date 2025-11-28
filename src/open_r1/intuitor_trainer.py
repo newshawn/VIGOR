@@ -554,10 +554,6 @@ class INTUITORTrainer(Trainer):
             kl_eta = 1.0
         self.kl_reward_eta = float(kl_eta)
         self._kl_reward_params_cache = None
-        self.kl_reward_diversity_weight = float(getattr(args, "kl_reward_diversity_weight", 0.1))
-        self.kl_reward_diversity_temperature = float(getattr(args, "kl_reward_diversity_temperature", 0.1))
-        self.kl_reward_diversity_epsilon = float(getattr(args, "kl_reward_diversity_epsilon", 1e-8))
-        # import pdb; pdb.set_trace()
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 
@@ -1065,39 +1061,6 @@ class INTUITORTrainer(Trainer):
             torch.stack(p_norms).to(device=model_device, dtype=torch.float32),
         )
 
-    def _compute_kl_reward_diversity_bonus(
-        self, grouped_rewards: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Encourages the per-prompt KL rewards to avoid a uniform distribution by adding a log-ratio bonus.
-
-        Returns:
-            bonuses (`torch.Tensor`): Shape matches grouped_rewards. Each entry is added to the corresponding reward.
-            mean_kl (`torch.Tensor`): Mean KL(q || uniform) across prompts for logging.
-            mean_entropy (`torch.Tensor`): Mean entropy of q across prompts for logging.
-        """
-
-        if grouped_rewards.numel() == 0:
-            zero = grouped_rewards.new_zeros(1)
-            return grouped_rewards.clone(), zero, zero
-
-        temperature = max(float(self.kl_reward_diversity_temperature), 1e-6)
-        epsilon = float(self.kl_reward_diversity_epsilon)
-        scaled = grouped_rewards / temperature
-        scaled = scaled - scaled.max(dim=1, keepdim=True).values
-        probs = torch.softmax(scaled, dim=1)
-        probs = probs.clamp_min(epsilon)
-        log_probs = probs.log()
-        num_generations = grouped_rewards.size(1)
-        log_uniform = -math.log(max(1, num_generations))
-        log_ratio = log_probs - log_uniform
-        bonuses = self.kl_reward_diversity_weight * log_ratio
-        kl_per_prompt = (probs * log_ratio).sum(dim=1)
-        entropy_per_prompt = -(probs * log_probs).sum(dim=1)
-        mean_kl = kl_per_prompt.mean()
-        mean_entropy = entropy_per_prompt.mean()
-        # import pdb; pdb.set_trace()
-        return bonuses, mean_kl, mean_entropy
 
 
     # def _log_optional_modules(self) -> None:
@@ -1407,23 +1370,30 @@ class INTUITORTrainer(Trainer):
             float(gathered_p_norms.std(unbiased=False).item()) if gathered_p_norms.numel() > 0 else float("nan")
         )
 
-        # === 按 completion 熵做 focal 风格的 KL 奖励缩放：Reward = -||g|| * (H_avg)^lambda ===
+        # === 按 completion 熵做 focal 风格的 KL 奖励缩放：Reward = -||g|| * (H_avg)^lambda 或者 Reward = -||g|| * (1 - p_norm)^lambda ===
         if getattr(self.args, "kl_entropy_weighting_enabled", False) and gathered_entropies.numel() > 0:
             entropy_eps = 1e-6
             # 固定 lambda，不再使用 warmup/线性/余弦衰减
             focal_lambda = float(getattr(self.args, "kl_entropy_focal_lambda", -1))
             focal_metric = str(getattr(self.args, "kl_entropy_focal_metric", "entropy")).lower()
             if focal_metric == "p_norm":
-                base = (1.0 - gathered_p_norms.view(-1, self.num_generations)).clamp_min(entropy_eps)
+                # 仅对超出目标 p_norm 的 completion 施加惩罚，并在极端置信度时做裁剪避免梯度崩塌
+                p_norm_vals = gathered_p_norms.view(-1, self.num_generations)
+                pnorm_target = float(getattr(self.args, "kl_entropy_pnorm_target", 0.9))
+                base = torch.where(
+                    p_norm_vals >= pnorm_target,
+                    (1.0 - p_norm_vals).clamp_min(entropy_eps),  # 高置信度才用小数
+                    torch.ones_like(p_norm_vals),                # 否则就用做1，这样1^lambda=1，不改变奖励
+                )
             else:
                 base = (gathered_entropies.view(-1, self.num_generations) + entropy_eps).clamp_min(entropy_eps)
 
             focal_weights = base.pow(focal_lambda)
-            # import pdb; pdb.set_trace()
             raw_kl_rewards_by_prompt = raw_kl_rewards_by_prompt * focal_weights
             entropy_weight_mean_record = focal_weights.mean().item()
             entropy_weight_std_record = focal_weights.std(unbiased=False).item()
             focal_lambda_record = float(focal_lambda)
+            # import pdb; pdb.set_trace()
         # import pdb; pdb.set_trace()
         # === KL 奖励归一：按每个 prompt 内 raw_kl（数值越大代表梯度越小、奖励越高）做 rank，映射到 [-1, 1] ===
         # raw_kl_rewards_by_prompt 为负数，绝对值越小（越靠近 0）表示梯度越小 → 奖励越高
