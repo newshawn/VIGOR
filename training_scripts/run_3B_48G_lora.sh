@@ -3,6 +3,8 @@ export NCCL_P2P_DISABLE=1
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
 which python
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
+# 保证源码优先被 import
+export PYTHONPATH=/home/wenxuexiang/projects/Intuitor/open-r1-intuitor/src:${PYTHONPATH}
 unset http_proxy
 unset https_proxy
 unset HTTP_PROXY

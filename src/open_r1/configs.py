@@ -46,10 +46,17 @@ class GRPOConfig(trl.GRPOConfig):
         },
     )
     kl_entropy_focal_lambda: float = field(
-        default=-0.5,
+        default=-0.25,
         metadata={
             "help": "Exponent lambda for entropy-based focal scaling of KL reward: weight=(1 - H_avg)^lambda. "
             "Use negative values to penalize over-confident (low-entropy) completions."
+        },
+    )
+    kl_entropy_low_entropy_target: Optional[float] = field(
+        default=0.1,
+        metadata={
+            "help": "If set, only apply entropy-based focal scaling when completion entropy is below this target "
+            "(in nats). Leave unset to scale all completions."
         },
     )
     kl_entropy_pnorm_target: float = field(

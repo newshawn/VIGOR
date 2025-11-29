@@ -1380,15 +1380,22 @@ class INTUITORTrainer(Trainer):
             if focal_metric == "p_norm":
                 # 仅对超出目标 p_norm 的 completion 施加惩罚，并在极端置信度时做裁剪避免梯度崩塌
                 p_norm_vals = gathered_p_norms.view(-1, self.num_generations)
-                pnorm_target = float(getattr(self.args, "kl_entropy_pnorm_target", 0.9))
-                base = torch.where(
-                    p_norm_vals >= pnorm_target,
-                    (1.0 - p_norm_vals).clamp_min(entropy_eps),  # 高置信度才用小数
-                    torch.ones_like(p_norm_vals),                # 否则就用做1，这样1^lambda=1，不改变奖励
-                )
+                pnorm_target = getattr(self.args, "kl_entropy_pnorm_target", 0.9)
+                base = torch.ones_like(p_norm_vals)
+                if pnorm_target is not None:
+                    pnorm_mask = p_norm_vals > float(pnorm_target)
+                    base = torch.where(
+                        pnorm_mask,
+                        (1.0 - p_norm_vals).clamp_min(entropy_eps),  # 高置信度才用小数
+                        torch.ones_like(p_norm_vals),                # 否则就用1，这样1^lambda=1，不改变奖励
+                    )
             else:
+                entropy_target = getattr(self.args, "kl_entropy_low_entropy_target", None)
                 base = (gathered_entropies.view(-1, self.num_generations) + entropy_eps).clamp_min(entropy_eps)
-
+                if entropy_target is not None:
+                    entropy_mask = base < float(entropy_target)
+                    # 高于阈值的直接用 1，不再额外 mask 一次
+                    base = torch.where(entropy_mask, base, torch.ones_like(base))
             focal_weights = base.pow(focal_lambda)
             raw_kl_rewards_by_prompt = raw_kl_rewards_by_prompt * focal_weights
             entropy_weight_mean_record = focal_weights.mean().item()

@@ -6,3 +6,7 @@ run_intuitor.log
 logs/
 det_yaml/
 .venv_lighteval/
+task_registry.json
+.github/
+assets/
+.venv
