@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import subprocess
 from typing import List
 
@@ -24,7 +23,6 @@ from transformers.training_args import TrainingArguments
 
 from .evaluation import run_benchmark_jobs
 from .hub import push_to_hub_revision
-from .wandb_logging import save_git_patch_if_possible
 
 
 def is_slurm_available() -> bool:
@@ -79,46 +77,8 @@ class PushToHubRevisionCallback(TrainerCallback):
                 future.add_done_callback(run_benchmark_callback)
 
 
-class WandbGitPatchCallback(TrainerCallback):
-    """
-    Save the current git diff to the active wandb run once training starts.
-    """
-
-    def __init__(self, *_args, **_kwargs) -> None:
-        self._saved = False
-
-    def on_train_begin(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        **kwargs,
-    ):
-        if self._saved or not state.is_world_process_zero:
-            return
-        save_git_patch_if_possible(getattr(args, "report_to", None))
-        self._saved = True
-
-
-def _wants_wandb_logging(train_config) -> bool:
-    report_to = getattr(train_config, "report_to", None)
-    if report_to is None:
-        return False
-    if isinstance(report_to, str):
-        return "wandb" in report_to
-    try:
-        return "wandb" in list(report_to)
-    except Exception:
-        return False
-
-
-def _flag_is_disabled(env_value: str) -> bool:
-    return str(env_value).lower() in {"0", "false", "no", "off"}
-
-
 CALLBACKS = {
     "push_to_hub_revision": PushToHubRevisionCallback,
-    "wandb_git_patch": WandbGitPatchCallback,
 }
 
 
@@ -128,11 +88,5 @@ def get_callbacks(train_config, model_config) -> List[TrainerCallback]:
         if callback_name not in CALLBACKS:
             raise ValueError(f"Callback {callback_name} not found in CALLBACKS.")
         callbacks.append(CALLBACKS[callback_name](model_config))
-
-    wandb_patch_enabled = not _flag_is_disabled(os.environ.get("INTUITOR_ENABLE_WANDB_GIT_PATCH", "1"))
-    if wandb_patch_enabled and _wants_wandb_logging(train_config):
-        already_added = any(isinstance(cb, WandbGitPatchCallback) for cb in callbacks)
-        if not already_added:
-            callbacks.append(WandbGitPatchCallback())
 
     return callbacks

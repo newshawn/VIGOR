@@ -627,6 +627,7 @@ class INTUITORTrainer(Trainer):
         self.log_completions = False
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
+        self._wandb_artifact_logged = False
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
         maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.gradient_accumulation_steps
@@ -1633,6 +1634,10 @@ class INTUITORTrainer(Trainer):
             super().log(logs)
         self._metrics[mode].clear()
 
+        # 在 wandb run 初始化后尽早上传代码快照，且只上传一次
+        if not self._wandb_artifact_logged:
+            self._maybe_log_wandb_artifacts()
+
         if self.accelerator.is_main_process and self.log_completions:
             if is_rich_available():
                 print_prompt_completions_sample(
@@ -1971,6 +1976,62 @@ class INTUITORTrainer(Trainer):
         if len(text) <= max_chars:
             return text
         return text[: max_chars - 3] + "..."
+
+    def _maybe_log_wandb_artifacts(self) -> None:
+        """Upload code snapshot as a W&B artifact when enabled via UPLOAD_WANDB_ARTIFACTS."""
+        if self._wandb_artifact_logged:
+            return
+
+        upload_flag = str(os.environ.get("UPLOAD_WANDB_ARTIFACTS", "")).lower()
+        if upload_flag not in {"1", "true", "yes", "y", "on"}:
+            return
+        if not self.accelerator.is_main_process:
+            return
+        if not (is_wandb_available() and wandb.run is not None):
+            self.accelerator.print("[WANDB] Skipping artifact upload because no active wandb run was found.")
+            return
+
+        repo_root = Path(__file__).resolve().parents[2]
+        run = wandb.run
+        artifact_parts = []
+        if run and run.name:
+            artifact_parts.append(run.name)
+        if run and run.id:
+            artifact_parts.append(run.id)
+        artifact_name = "-".join(artifact_parts) if artifact_parts else "training_code"
+        code_artifact = wandb.Artifact(
+            artifact_name,
+            type="code",
+            metadata={
+                "run_id": run.id if run else None,
+                "run_name": run.name if run else None,
+                "run_url": run.get_url() if run else None,
+            },
+        )
+
+        added_any = False
+        for rel_path in ("src", "training_scripts", "recipes", "det_yaml"):
+            target = repo_root / rel_path
+            if target.exists():
+                code_artifact.add_dir(str(target), name=rel_path)
+                added_any = True
+
+        if not added_any:
+            self.accelerator.print("[WANDB] No code directories found for artifact upload (expected src/ and training_scripts/).")
+            return
+
+        aliases = ["latest"]
+        if run and run.name:
+            aliases.append(run.name)
+
+        try:
+            wandb.run.log_artifact(code_artifact, aliases=aliases)
+            self._wandb_artifact_logged = True
+            self.accelerator.print(
+                f"[WANDB] Uploaded code artifact '{artifact_name}' (aliases={aliases}) with src/ and training_scripts/ for reproducibility."
+            )
+        except Exception as exc:  # best-effort; do not fail the run
+            self.accelerator.print(f"[WANDB] Failed to upload code artifact: {exc}")
 
     def create_model_card(
         self,

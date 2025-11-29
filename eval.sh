@@ -55,9 +55,11 @@ DEFAULT_MODEL=/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuito
 #   "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-grpo-3B_20251014_152032/checkpoint-40/"
 # )
 MODELS=(
-  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-120"    # 会自动加入该目录下所有 checkpoint-*
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-130"    # 会自动加入该目录下所有 checkpoint-*
   # "/run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B" # 也可填具体 checkpoint
-  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-110"
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-140"
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-150"
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-156"
 )
 
 

@@ -24,6 +24,7 @@ export WANDB_ENTITY=w597744907-zhejiang-university
 export WANDB_MODE=online
 export WANDB_DISABLED=false
 export INTUITOR_ENABLE_WANDB_GIT_PATCH=1  # upload current git diff via wandb.save_git_patch()
+export UPLOAD_WANDB_ARTIFACTS=true        # true: 训练结束后上传日志等文件到 wandb artifact
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export CUDA_VISIBLE_DEVICES=0

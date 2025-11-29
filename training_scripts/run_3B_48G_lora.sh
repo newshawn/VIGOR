@@ -22,9 +22,10 @@ export WANDB_MODE=online
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export INTUITOR_SKIP_GIT_CHECK=1
+export UPLOAD_WANDB_ARTIFACTS=true        # true: 上传日志等文件到 wandb artifact
 
 # === 手动/环境可配置的续跑参数（默认关闭） ===
-RESUME_MODE=true              # true: 续跑；false: 新跑
+RESUME_MODE=false              # true: 续跑；false: 新跑
 RESUME_TIMESTAMP=20251127_022509   # 续跑时填入要复用的时间戳
 export WANDB_RESUME=allow
 export WANDB_RUN_ID=h9in6378       # 续跑时填入要续写的 wandb run id
