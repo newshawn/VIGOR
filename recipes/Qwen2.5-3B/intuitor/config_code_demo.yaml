@@ -1,11 +1,11 @@
 # Model arguments
-model_name_or_path: Qwen/Qwen2.5-3B
+model_name_or_path: /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B
 model_revision: main
 torch_dtype: bfloat16
 attn_implementation: flash_attention_2
 
 # Data training arguments
-dataset_name: "~/data/codecontest"
+dataset_name: "/home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/codecontest"
 dataset_config: default
 dataset_prompt_column: prompt
 system_prompt: "You are an AI designed to help solve competitive programming problems by generating Python code."
@@ -31,8 +31,8 @@ logging_strategy: steps
 lr_scheduler_type: cosine
 max_prompt_length: 1024
 max_completion_length: 2048
-max_steps: 50
-num_generations: 14
+max_steps: 100
+num_generations: 8
 num_train_epochs: 1
 num_iterations: 1
 output_dir: data/Qwen2.5-3B-Intuitor-Code
@@ -43,7 +43,7 @@ push_to_hub: false
 report_to:
 - wandb
 save_strategy: "steps"
-save_total_limit: 6
+save_total_limit: 15
 save_steps: 10
 seed: 7
 warmup_ratio: 0.1
