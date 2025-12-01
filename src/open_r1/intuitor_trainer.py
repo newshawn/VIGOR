@@ -974,6 +974,7 @@ class INTUITORTrainer(Trainer):
         entropies: list[torch.Tensor] = []
         logprobs: list[torch.Tensor] = []
         p_norms: list[torch.Tensor] = []
+        truncated_flags: list[bool] = []
         model_device = prompt_ids.device
         for idx in range(input_ids.size(0)):
             model.zero_grad(set_to_none=True)
@@ -982,11 +983,14 @@ class INTUITORTrainer(Trainer):
             single_labels = labels[idx : idx + 1]
 
             if completion_mask[idx].sum() <= 0:
-                rewards.append(torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0))
-                entropies.append(torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0))
-                logprobs.append(torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0))
-                p_norms.append(torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0))
+                truncated_flags.append(True)
+                nan_scalar = torch.tensor(float("nan"), device=model_device, dtype=torch.float32)
+                rewards.append(nan_scalar)
+                entropies.append(nan_scalar)
+                logprobs.append(nan_scalar)
+                p_norms.append(nan_scalar)
                 continue
+            truncated_flags.append(False)
 
             with torch.enable_grad():
                 # Use bf16 autocast to reduce activation memory during KL gradient computation
@@ -1043,23 +1047,53 @@ class INTUITORTrainer(Trainer):
                     gather_labels = labels_shifted.masked_fill(token_mask == 0, 0).unsqueeze(-1)  # 避免非法索引
                     token_log_probs = torch.gather(log_probs_all, dim=-1, index=gather_labels).squeeze(-1)
                     seq_log_prob = (token_log_probs * token_mask.float()).sum()
+                    if comp_len > 0:
+                        token_probs = token_log_probs.exp()
+                        mean_token_prob = (token_probs * token_mask.float()).sum() / float(comp_len)
+                    else:
+                        mean_token_prob = torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0)
                 else:
                     seq_log_prob = torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0)
+                    mean_token_prob = torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0)
             logprobs.append(seq_log_prob)
-            # 归一化后的平均 token 概率（几何均值），便于直观查看概率尺度
-            if comp_len > 0:
-                p_norm = torch.exp(seq_log_prob / float(comp_len))
-            else:
-                p_norm = torch.zeros(1, device=model_device, dtype=torch.float32).squeeze(0)
-            p_norms.append(p_norm)
+            # 归一化后的平均 token 概率（算术均值）
+            p_norms.append(mean_token_prob)
             # 释放局部变量，减少显存滞留
             del loss, grads, logits_detached
 
+        rewards_tensor = torch.stack(rewards).to(device=model_device, dtype=torch.float32)
+        entropies_tensor = torch.stack(entropies).to(device=model_device, dtype=torch.float32)
+        logprobs_tensor = torch.stack(logprobs).to(device=model_device, dtype=torch.float32)
+        p_norms_tensor = torch.stack(p_norms).to(device=model_device, dtype=torch.float32)
+
+        # 将截断样本替换为“批内最差”值，确保排序时始终垫底
+        # 可以把margin都设置为1e-3，然后-||g||比最差的低margin，p_norm比最高的高margin，entropy比最低的低margin，logprobs比最低的低margin
+        truncated_mask = torch.tensor(truncated_flags, device=model_device, dtype=torch.bool)
+        if truncated_mask.any().item():
+            valid_mask = ~truncated_mask
+            if valid_mask.any().item():
+                margin = 1e-3
+                fallback_reward = rewards_tensor[valid_mask].min() - margin
+                fallback_entropy = entropies_tensor[valid_mask].min() - margin
+                fallback_logprob = logprobs_tensor[valid_mask].min() - margin
+                fallback_p_norm = p_norms_tensor[valid_mask].max() + margin
+            else:
+                # 极端场景：全是截断样本，退回固定兜底值
+                fallback_reward = torch.tensor(-20.0, device=model_device, dtype=torch.float32)
+                fallback_entropy = torch.tensor(0.1, device=model_device, dtype=torch.float32)
+                fallback_logprob = torch.tensor(0.0, device=model_device, dtype=torch.float32)
+                fallback_p_norm = torch.tensor(0.95, device=model_device, dtype=torch.float32)
+
+            rewards_tensor = torch.where(truncated_mask, fallback_reward, rewards_tensor)
+            entropies_tensor = torch.where(truncated_mask, fallback_entropy, entropies_tensor)
+            logprobs_tensor = torch.where(truncated_mask, fallback_logprob, logprobs_tensor)
+            p_norms_tensor = torch.where(truncated_mask, fallback_p_norm, p_norms_tensor)
+
         return (
-            torch.stack(rewards).to(device=model_device, dtype=torch.float32),
-            torch.stack(entropies).to(device=model_device, dtype=torch.float32),
-            torch.stack(logprobs).to(device=model_device, dtype=torch.float32),
-            torch.stack(p_norms).to(device=model_device, dtype=torch.float32),
+            rewards_tensor,
+            entropies_tensor,
+            logprobs_tensor,
+            p_norms_tensor,
         )
 
 
