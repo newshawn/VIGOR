@@ -40,11 +40,11 @@ searcher:
 profiling:
   enabled: true
 
-# 在容器内先启动 clash (mihomo)，再运行原训练脚本；端口 18082 供 http/https 代理
+# 在容器内先启动 clash (mihomo)，再运行原训练脚本；端口 18093 供 http/https 代理
 entrypoint: >
   bash -lc "
     clash on
-    export http_proxy=http://127.0.0.1:18082
+    export http_proxy=http://127.0.0.1:18093
     export https_proxy=$http_proxy
     export HTTP_PROXY=$http_proxy
     export HTTPS_PROXY=$https_proxy

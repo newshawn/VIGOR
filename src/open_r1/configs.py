@@ -53,14 +53,14 @@ class GRPOConfig(trl.GRPOConfig):
         },
     )
     kl_entropy_low_entropy_target: Optional[float] = field(
-        default=0.1,
+        default=None,
         metadata={
             "help": "If set, only apply entropy-based focal scaling when completion entropy is below this target "
             "(in nats). Leave unset to scale all completions."
         },
     )
     kl_entropy_pnorm_target: float = field(
-        default=0.9,
+        default=None,
         metadata={
             "help": "For focal_metric='p_norm', only down-weight completions whose p_norm exceeds this target."
         },
@@ -73,7 +73,7 @@ class GRPOConfig(trl.GRPOConfig):
         },
     )
     kl_entropy_focal_metric: str = field(
-        default="p_norm",
+        default="entropy",
         metadata={
             "help": "Base metric for focal scaling: 'entropy' uses H, 'p_norm' uses (1 - p_norm)."
         },

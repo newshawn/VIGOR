@@ -10,8 +10,8 @@ cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
 export PATH=/usr/local/cuda-12.4/bin:${PATH}
 export CUDA_HOME=/usr/local/cuda-12.4
-# export http_proxy=http://10.130.130.5:18082
-# export https_proxy=http://10.130.130.5:18082
+# export http_proxy=http://10.130.130.5:18093
+# export https_proxy=http://10.130.130.5:18093
 # export HTTP_PROXY=$http_proxy
 # export HTTPS_PROXY=$https_proxy
 export no_proxy="127.0.0.1,localhost,0.0.0.0,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local"

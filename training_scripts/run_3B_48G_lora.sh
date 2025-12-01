@@ -13,8 +13,8 @@ unset HTTPS_PROXY
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
 export PATH=/usr/local/cuda-12.4/bin:${PATH} 
 export CUDA_HOME=/usr/local/cuda-12.4
-export http_proxy=http://127.0.0.1:18082
-export https_proxy=http://127.0.0.1:18082
+export http_proxy=http://127.0.0.1:18093
+export https_proxy=http://127.0.0.1:18093
 export HTTP_PROXY=$http_proxy
 export HTTPS_PROXY=$https_proxy
 export no_proxy="127.0.0.1,localhost,0.0.0.0,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local"
@@ -28,9 +28,9 @@ export UPLOAD_WANDB_ARTIFACTS=true        # true: 上传日志等文件到 wandb
 
 # === 手动/环境可配置的续跑参数（默认关闭） ===
 RESUME_MODE=false              # true: 续跑；false: 新跑
-RESUME_TIMESTAMP=20251127_022509   # 续跑时填入要复用的时间戳
+RESUME_TIMESTAMP=20251129_080256   # 续跑时填入要复用的时间戳
 export WANDB_RESUME=allow
-export WANDB_RUN_ID=h9in6378       # 续跑时填入要续写的 wandb run id
+export WANDB_RUN_ID=rtzejar0       # 续跑时填入要续写的 wandb run id
 
 num_generations=8 # 作者使用7，但是3卡时候用7会犯错
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo

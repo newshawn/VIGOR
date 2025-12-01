@@ -1253,13 +1253,15 @@ class INTUITORTrainer(Trainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
         # 计算kl奖励，并返回每个 completion 的平均熵/对数似然（后续用于日志/指标）
-        kl_rewards, completion_entropies, completion_logps, completion_p_norms = self._compute_gradient_kl_reward(
+        neg_grad_L2, completion_entropies, completion_logps, completion_p_norms = self._compute_gradient_kl_reward(
             self.model, prompt_ids, prompt_mask, completion_ids, completion_mask
         )
-        kl_rewards = kl_rewards.detach()
+        neg_grad_L2 = neg_grad_L2.detach()
         completion_entropies = completion_entropies.detach()
         completion_logps = completion_logps.detach()
         completion_p_norms = completion_p_norms.detach()
+        kl_rewards = neg_grad_L2
+        kl_rewards = kl_rewards.detach()
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
@@ -1337,39 +1339,31 @@ class INTUITORTrainer(Trainer):
 
         # === 多卡同步：收集各类奖励/掩码，后续统一做归一化与日志记录 ===
         rewards_per_func = gather(rewards_per_func)
-        gathered_kl_rewards_raw = gather(kl_rewards).reshape(-1)    # 将所有gpu的kl_reward聚集到一起，例如单卡kl_rewards.shape=[6]，那么gathered_kl_rewards.shape=[12]
+        gathered_neg_grad_L2 = gather(neg_grad_L2).reshape(-1)    # 将所有gpu的 -||g|| 聚集到一起，例如单卡shape=[6]，那么gathered_neg_grad_L2.shape=[12]
+        gathered_kl_rewards = gather(kl_rewards).reshape(-1)
         gathered_entropies = gather(completion_entropies).reshape(-1)
         gathered_logprobs = gather(completion_logps).reshape(-1)
         gathered_p_norms = gather(completion_p_norms).reshape(-1)
-        # === 目的是得到raw_kl_rewards的mean_record和std_record，记录到wandb上面（不再使用多样性bonus） ===
-        # 因为 std 得需要每个prompt组内计算std，再取平均值，不能所有的prompt的组放一起取平均值
-        raw_kl_rewards_by_prompt = gathered_kl_rewards_raw.view(-1, self.num_generations)
-        kl_diversity_stats = None
-        raw_mean_kl_rewards = raw_kl_rewards_by_prompt.mean(dim=1)
-        raw_std_kl_rewards = raw_kl_rewards_by_prompt.std(dim=1)
-        raw_kl_reward_record = raw_mean_kl_rewards.mean().item()
-        raw_kl_reward_std_record = raw_std_kl_rewards.mean().item()
+        # === 目的是得到 -||g||（未加熵惩罚）的 mean/std 记录到 wandb 上（不再使用多样性 bonus） ===
+        # 因为 std 需要每个 prompt 组内计算 std，再取平均值，不能所有的 prompt 的组放一起取平均值
+        neg_grad_L2_by_prompt = gathered_neg_grad_L2.view(-1, self.num_generations)
+        mean_neg_grad_L2 = neg_grad_L2_by_prompt.mean(dim=1)
+        std_neg_grad_L2 = neg_grad_L2_by_prompt.std(dim=1)
+        neg_grad_L2_record = mean_neg_grad_L2.mean().item()
+        neg_grad_L2_std_record = std_neg_grad_L2.mean().item()
         entropy_weight_mean_record = float("nan")
         entropy_weight_std_record = float("nan")
         focal_lambda_record = float("nan")
-        entropy_mean_record = (
-            float(gathered_entropies.mean().item()) if gathered_entropies.numel() > 0 else float("nan")
-        )
-        entropy_std_record = (
-            float(gathered_entropies.std(unbiased=False).item()) if gathered_entropies.numel() > 0 else float("nan")
-        )
-        logprob_mean_record = (
-            float(gathered_logprobs.mean().item()) if gathered_logprobs.numel() > 0 else float("nan")
-        )
-        logprob_std_record = (
-            float(gathered_logprobs.std(unbiased=False).item()) if gathered_logprobs.numel() > 0 else float("nan")
-        )
-        pnorm_mean_record = (
-            float(gathered_p_norms.mean().item()) if gathered_p_norms.numel() > 0 else float("nan")
-        )
-        pnorm_std_record = (
-            float(gathered_p_norms.std(unbiased=False).item()) if gathered_p_norms.numel() > 0 else float("nan")
-        )
+
+        def _mean_and_std(tensor: torch.Tensor) -> tuple[float, float]:
+            if tensor.numel() == 0:
+                return float("nan"), float("nan")
+            return float(tensor.mean().item()), float(tensor.std(unbiased=False).item())
+
+        entropy_mean_record, entropy_std_record = _mean_and_std(gathered_entropies)
+        logprob_mean_record, logprob_std_record = _mean_and_std(gathered_logprobs)
+        pnorm_mean_record, pnorm_std_record = _mean_and_std(gathered_p_norms)
+        kl_rewards_by_prompt = gathered_kl_rewards.view(-1, self.num_generations)
 
         # === 按 completion 熵做 focal 风格的 KL 奖励缩放：Reward = -||g|| * (H_avg)^lambda 或者 Reward = -||g|| * (1 - p_norm)^lambda ===
         if getattr(self.args, "kl_entropy_weighting_enabled", False) and gathered_entropies.numel() > 0:
@@ -1392,21 +1386,23 @@ class INTUITORTrainer(Trainer):
             else:
                 entropy_target = getattr(self.args, "kl_entropy_low_entropy_target", None)
                 base = (gathered_entropies.view(-1, self.num_generations) + entropy_eps).clamp_min(entropy_eps)
+                # import pdb; pdb.set_trace()
                 if entropy_target is not None:
                     entropy_mask = base < float(entropy_target)
                     # 高于阈值的直接用 1，不再额外 mask 一次
                     base = torch.where(entropy_mask, base, torch.ones_like(base))
+            # import pdb; pdb.set_trace()
             focal_weights = base.pow(focal_lambda)
-            raw_kl_rewards_by_prompt = raw_kl_rewards_by_prompt * focal_weights
+            kl_rewards_by_prompt = kl_rewards_by_prompt * focal_weights
             entropy_weight_mean_record = focal_weights.mean().item()
             entropy_weight_std_record = focal_weights.std(unbiased=False).item()
             focal_lambda_record = float(focal_lambda)
             # import pdb; pdb.set_trace()
         # import pdb; pdb.set_trace()
-        # === KL 奖励归一：按每个 prompt 内 raw_kl（数值越大代表梯度越小、奖励越高）做 rank，映射到 [-1, 1] ===
-        # raw_kl_rewards_by_prompt 为负数，绝对值越小（越靠近 0）表示梯度越小 → 奖励越高
-        # 按 raw 值升序排序：最负的 rank 最低，最接近 0 的 rank 最高
-        rank_idx = raw_kl_rewards_by_prompt.argsort(dim=1, stable=True)
+        # === KL 奖励归一：按每个 prompt 内（可含熵惩罚的）kl_rewards 做 rank，映射到 [-1, 1] ===
+        # kl_rewards_by_prompt 为负数，绝对值越小（越靠近 0）表示梯度越小 → 奖励越高
+        # 按值升序排序：最负的 rank 最低，最接近 0 的 rank 最高
+        rank_idx = kl_rewards_by_prompt.argsort(dim=1, stable=True)
         ranks = rank_idx.argsort(dim=1, stable=True).float()  # [num_prompt, num_generations] 数值越大越“好”
         if self.num_generations > 1:
             ranks = (ranks / (self.num_generations - 1)) * 2.0 - 1.0
@@ -1490,10 +1486,12 @@ class INTUITORTrainer(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
-        # self._metrics[mode]["rewards/kl_reward/mean"].append(kl_reward_record)
-        # self._metrics[mode]["rewards/kl_reward/std"].append(kl_reward_std_record)
-        self._metrics[mode]["rewards/kl_reward_raw/mean"].append(raw_kl_reward_record)
-        self._metrics[mode]["rewards/kl_reward_raw/std"].append(raw_kl_reward_std_record)
+        self._metrics[mode]["rewards/kl_reward/mean"].append(kl_reward_record)
+        self._metrics[mode]["rewards/kl_reward/std"].append(kl_reward_std_record)
+        self._metrics[mode]["rewards/neg_grad_L2/mean"].append(neg_grad_L2_record)
+        self._metrics[mode]["rewards/neg_grad_L2/std"].append(neg_grad_L2_std_record)
+        self._metrics[mode]["rewards/kl_reward_raw/mean"].append(neg_grad_L2_record)
+        self._metrics[mode]["rewards/kl_reward_raw/std"].append(neg_grad_L2_std_record)
         self._metrics[mode]["entropy/mean"].append(entropy_mean_record)
         self._metrics[mode]["entropy/std"].append(entropy_std_record)
         self._metrics[mode]["logprob/mean"].append(logprob_mean_record)
@@ -1503,10 +1501,6 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["rewards/kl_entropy_weight/mean"].append(entropy_weight_mean_record)
         self._metrics[mode]["rewards/kl_entropy_weight/std"].append(entropy_weight_std_record)
         self._metrics[mode]["rewards/kl_entropy_focal_lambda"].append(focal_lambda_record)
-        if kl_diversity_stats is not None:
-            kl_divergence_record, kl_entropy_record = kl_diversity_stats
-            self._metrics[mode]["rewards/kl_reward_diversity/kl"].append(kl_divergence_record)
-            self._metrics[mode]["rewards/kl_reward_diversity/entropy"].append(kl_entropy_record)
         # 监测 kl 的 advantage的平均值，为0才正常
         self._metrics[mode]["advantages/kl_mean_advantage"].append(self.accelerator.gather_for_metrics(kl_advantage).nanmean().item())
         self._metrics[mode]["advantages/total_mean_advantage"].append(self.accelerator.gather_for_metrics(total_advantage).nanmean().item())

@@ -44,7 +44,7 @@ profiling:
 entrypoint: >
   bash -lc "
     clash on
-    export http_proxy=http://127.0.0.1:18082
+    export http_proxy=http://127.0.0.1:18093
     export https_proxy=$http_proxy
     export HTTP_PROXY=$http_proxy
     export HTTPS_PROXY=$https_proxy

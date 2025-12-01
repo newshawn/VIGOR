@@ -12,8 +12,8 @@ cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
 export PATH=/usr/local/cuda-12.4/bin:${PATH} 
 export CUDA_HOME=/usr/local/cuda-12.4
-export http_proxy=http://127.0.0.1:18082
-export https_proxy=http://127.0.0.1:18082
+export http_proxy=http://127.0.0.1:18093
+export https_proxy=http://127.0.0.1:18093
 export HTTP_PROXY=$http_proxy
 export HTTPS_PROXY=$https_proxy
 export no_proxy="127.0.0.1,localhost,0.0.0.0,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local"
@@ -24,10 +24,10 @@ export WANDB_ENTITY=w597744907-zhejiang-university
 export WANDB_MODE=online
 export WANDB_DISABLED=false
 export INTUITOR_ENABLE_WANDB_GIT_PATCH=1  # upload current git diff via wandb.save_git_patch()
-export UPLOAD_WANDB_ARTIFACTS=true        # true: 训练结束后上传日志等文件到 wandb artifact
+export UPLOAD_WANDB_ARTIFACTS=false        # true: 训练结束后上传日志等文件到 wandb artifact
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=3
 export INTUITOR_SKIP_GIT_CHECK=1  # 调试模式下，设置为 1 跳过 Git 检查
 CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
@@ -150,6 +150,8 @@ echo "[DEBUG] 直接以 python 前台运行，便于 pdb 调试（不使用 acce
 echo "Command: CUDA_VISIBLE_DEVICES=$CUDA_DEVICES python -u $SCRIPT_PATH ..."
 env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
   python -u "$SCRIPT_PATH" \
+    --eval_strategy "steps" \
+    --eval_steps 10 \
     --per_device_eval_batch_size "$BATCH_SIZE" \
     --per_device_train_batch_size "$BATCH_SIZE" \
     --gradient_accumulation_steps "$GRAD_ACCUM" \
@@ -157,7 +159,7 @@ env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
     --max_steps "$MAX_STEPS" \
     --num_generations "$num_generations" \
     --output_dir "$OUTPUT_DIR" \
-    --config "$CONFIG_FILE" \
+    --config "$CONFIG_FILE" --do_eval true \
     --wandb_project "$WANDB_PROJECT" \
     --run_name "$RUN_NAME" \
     $EXTRA_ARGS

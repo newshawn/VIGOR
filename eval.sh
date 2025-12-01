@@ -8,7 +8,7 @@
 
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/.venv_lighteval/bin/activate
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 # 确保 HF 本地缓存与离线模式（集群/无网环境使用本地缓存）
