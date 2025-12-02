@@ -59,24 +59,16 @@ else
 fi
 
 
-# 根据实验类型设置脚本和配置
-if [ "$EXP_TYPE" = "grpo" ]; then
-    SCRIPT_PATH="src/open_r1/grpo.py"
-    CONFIG_FILE="recipes/Qwen2.5-1.5B/grpo/config_demo.yaml"
-    WANDB_PROJECT="open-r1-debug"
-    RUN_NAME="GRPO-1.5B-${TIMESTAMP}"
-    LOG_PREFIX="grpo"
-else
-    SCRIPT_PATH="src/open_r1/intuitor.py"
-    CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo.yaml"
-    WANDB_PROJECT="open-r1-debug"
-    RUN_NAME="Intuitor-1.5B-${TIMESTAMP}"
-    LOG_PREFIX="intuitor"
-fi
+# 只使用intuitor
+SCRIPT_PATH="src/open_r1/intuitor.py"
+CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_code_demo_debug.yaml"
+WANDB_PROJECT="open-r1-debug"
+RUN_NAME="Intuitor-1.5B-Code-${TIMESTAMP}"
+LOG_PREFIX="intuitor_code"
 
 
 # 日志和模型输出目录（仅 debug）
-DEBUG_BASE="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-1.5B_debug_${TIMESTAMP}"
+DEBUG_BASE="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-1.5B-Code_debug_${TIMESTAMP}"
 LOG_DIR="${DEBUG_BASE}/logs"
 OUTPUT_DIR="${DEBUG_BASE}/ckpt"
 # 每次启动都生成独立日志文件，避免多次续跑覆盖
@@ -112,7 +104,7 @@ exec > >(tee "$RUN_LOG_FILE") 2>&1
 
 # 显示/记录当前配置参数
 PARAM_LOG="${LOG_DIR}/config_params.log"
-read -r -d '' RUN_CONFIG <<EOF
+read -r -d '' RUN_CONFIG <<EOF2
 ===== 当前配置参数 =====
 MODE: $MODE
 NUM_PROCESSES: $NUM_PROCESSES
@@ -135,7 +127,7 @@ num_generations: $num_generations
 OUTPUT_DIR: $OUTPUT_DIR
 START_VLLM: $START_VLLM
 ========================
-EOF
+EOF2
 printf "%s\n" "$RUN_CONFIG"
 printf "%s\n" "$RUN_CONFIG" > "$PARAM_LOG"
 

@@ -79,9 +79,9 @@ class GRPOConfig(trl.GRPOConfig):
         },
     )
     kl_entropy_weighting_enabled: bool = field(
-        default=True,
+        default=False,
         metadata={
-            "help": "If True, apply entropy-based focal scaling to KL rewards."
+            "help": "If True, apply entropy-based focal scal ing to KL rewards."
         },
     )
 
