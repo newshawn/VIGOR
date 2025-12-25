@@ -28,15 +28,15 @@ export UPLOAD_WANDB_ARTIFACTS=true        # true: 上传日志等文件到 wandb
 
 # === 手动/环境可配置的续跑参数（默认关闭） ===
 RESUME_MODE=false              # true: 续跑；false: 新跑
-RESUME_TIMESTAMP=20251129_080256   # 续跑时填入要复用的时间戳
+RESUME_TIMESTAMP=20251201_132449   # 续跑时填入要复用的时间戳
 export WANDB_RESUME=allow
-export WANDB_RUN_ID=rtzejar0       # 续跑时填入要续写的 wandb run id
+export WANDB_RUN_ID=gn4ngikk       # 续跑时填入要续写的 wandb run id
 
 num_generations=8 # 作者使用7，但是3卡时候用7会犯错
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
-MAX_STEPS=100    # 可选 -1 或者具体步数
+MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
-SAVE_TOTAL_LIMIT=16 # 控制最多保留的 checkpoint 数量
+SAVE_TOTAL_LIMIT=25 # 控制最多保留的 checkpoint 数量
 
 # GPU 分配策略
 # - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
@@ -47,7 +47,7 @@ if [ "$START_VLLM" = true ]; then
     NUM_PROCESSES=3
     BATCH_SIZE=4
     GRAD_ACCUM=32
-    lr=1.0e-06
+    lr=1e-5
 else
     VLLM_DEVICE=""
     CUDA_DEVICES="0,1,2,3"
@@ -161,15 +161,23 @@ if [ "$START_VLLM" != true ]; then
 fi
 
 # 启动训练脚本，默认的是24g版本，num_processes=7；为3的时候就使用48g显存
+# Mirror training log to terminal
+touch "$RUN_LOG_FILE"
+tail -n 0 -F "$RUN_LOG_FILE" &
+TAIL_PID=$!
 nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
-    accelerate launch --config_file recipes/accelerate_configs/zero3.yaml --num_processes=$NUM_PROCESSES \
+    accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=$NUM_PROCESSES \
     $SCRIPT_PATH \
     --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
-    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT $EXTRA_ARGS \
+    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT --save_only_model true $EXTRA_ARGS \
     > "$RUN_LOG_FILE" 2>&1 &
 TRAINING_PID=$!
 wait $TRAINING_PID
+if [ -n "${TAIL_PID:-}" ]; then
+    kill "$TAIL_PID" 2>/dev/null
+    wait "$TAIL_PID" 2>/dev/null
+fi
 echo "Training process started with PID: $TRAINING_PID"
 
 echo "Both processes started in the background. Check ${LOG_DIR}/vllm-server.log and ${RUN_LOG_FILE} for output."

@@ -1,9 +1,9 @@
 #!/bin/bash
-
-source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
+cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
+# source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
 # pip install -e /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 which python
-cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
+
 # unset http_proxy
 # unset https_proxy
 # unset HTTP_PROXY
@@ -22,22 +22,22 @@ export NO_PROXY="$no_proxy"
 export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_ENTITY=w597744907-zhejiang-university
 export WANDB_MODE=online
-export WANDB_DISABLED=false
+export WANDB_DISABLED=true
 export INTUITOR_ENABLE_WANDB_GIT_PATCH=1  # upload current git diff via wandb.save_git_patch()
 export UPLOAD_WANDB_ARTIFACTS=false        # true: 训练结束后上传日志等文件到 wandb artifact
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2
 export INTUITOR_SKIP_GIT_CHECK=1  # 调试模式下，设置为 1 跳过 Git 检查
 CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
 MODE=debug                     # 固定为 debug 模式
 START_VLLM=false               # debug 强制关闭 vLLM
 NUM_PROCESSES=1
-BATCH_SIZE=6
-GRAD_ACCUM=1
+BATCH_SIZE=4
+GRAD_ACCUM=2
 lr=3.0e-06
-num_generations=3
+num_generations=8
 EXP_TYPE=intuitor              # 可选值: intuitor 或 grpo
 MAX_STEPS=50                   # debug 下默认 50 步
 
@@ -46,6 +46,8 @@ RESUME_MODE=false              # true: 续跑；false: 新跑
 RESUME_TIMESTAMP=20251128-043845
 export WANDB_RUN_ID=8txj3olh
 export WANDB_RESUME=allow
+export HF_DATASETS_CACHE=/run/determined/NAS1/public/xuexiang/model
+export HF_DATASETS_OFFLINE=1  # 如需强制离线
 
 # 若续跑则复用传入的时间戳，否则生成新的
 if [ "$RESUME_MODE" = "true" ]; then
@@ -60,19 +62,13 @@ fi
 
 
 # 根据实验类型设置脚本和配置
-if [ "$EXP_TYPE" = "grpo" ]; then
-    SCRIPT_PATH="src/open_r1/grpo.py"
-    CONFIG_FILE="recipes/Qwen2.5-1.5B/grpo/config_demo.yaml"
-    WANDB_PROJECT="open-r1-debug"
-    RUN_NAME="GRPO-1.5B-${TIMESTAMP}"
-    LOG_PREFIX="grpo"
-else
-    SCRIPT_PATH="src/open_r1/intuitor.py"
-    CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo.yaml"
-    WANDB_PROJECT="open-r1-debug"
-    RUN_NAME="Intuitor-1.5B-${TIMESTAMP}"
-    LOG_PREFIX="intuitor"
-fi
+
+SCRIPT_PATH="src/open_r1/intuitor.py"
+CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo.yaml"
+WANDB_PROJECT="open-r1-debug"
+RUN_NAME="Intuitor-1.5B-${TIMESTAMP}"
+LOG_PREFIX="intuitor"
+
 
 
 # 日志和模型输出目录（仅 debug）
@@ -143,13 +139,14 @@ printf "%s\n" "$RUN_CONFIG" > "$PARAM_LOG"
 EXTRA_ARGS="--use_vllm false"
 
 # 仅在 debug 模式下，缩短生成长度（覆盖 YAML 的 max_completion_length: 2048）
-EXTRA_ARGS="$EXTRA_ARGS --max_completion_length 128"
+EXTRA_ARGS="$EXTRA_ARGS --max_completion_length 10"
 
 # 启动训练脚本：直接前台运行，便于调试
 echo "[DEBUG] 直接以 python 前台运行，便于 pdb 调试（不使用 accelerate）"
 echo "Command: CUDA_VISIBLE_DEVICES=$CUDA_DEVICES python -u $SCRIPT_PATH ..."
 env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
   python -u "$SCRIPT_PATH" \
+    --report_to none \
     --per_device_eval_batch_size "$BATCH_SIZE" \
     --per_device_train_batch_size "$BATCH_SIZE" \
     --gradient_accumulation_steps "$GRAD_ACCUM" \

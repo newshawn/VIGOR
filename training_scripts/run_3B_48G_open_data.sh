@@ -1,4 +1,5 @@
 #!/bin/bash
+# RL open-task training (Intuitor) on databricks/databricks-dolly-15k for Qwen2.5-3B
 export NCCL_P2P_DISABLE=1
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
 which python
@@ -11,7 +12,7 @@ unset HTTP_PROXY
 unset HTTPS_PROXY
 # clash off
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
-export PATH=/usr/local/cuda-12.4/bin:${PATH} 
+export PATH=/usr/local/cuda-12.4/bin:${PATH}
 export CUDA_HOME=/usr/local/cuda-12.4
 export http_proxy=http://127.0.0.1:18093
 export https_proxy=http://127.0.0.1:18093
@@ -28,21 +29,23 @@ export UPLOAD_WANDB_ARTIFACTS=true        # true: 上传日志等文件到 wandb
 
 # === 手动/环境可配置的续跑参数（默认关闭） ===
 RESUME_MODE=false              # true: 续跑；false: 新跑
-RESUME_TIMESTAMP=20251210_085759   # 续跑时填入要复用的时间戳
+RESUME_TIMESTAMP=20251129_080256   # 续跑时填入要复用的时间戳
 export WANDB_RESUME=allow
-export WANDB_RUN_ID=ae43rtju      # 续跑时填入要续写的 wandb run id
+export WANDB_RUN_ID=rtzejar0       # 续跑时填入要续写的 wandb run id
 
-num_generations=8 # 作者使用7，但是3卡时候用7会犯错
-EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
-MAX_STEPS=-1    # 可选 -1 或者具体步数
-START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
-SAVE_TOTAL_LIMIT=5 # 控制最多保留的 checkpoint 数量，当SAVE_STRATEGY="no"时无效
-SAVE_STRATEGY="no" # 使用 top-k 保存时关闭定期保存，用它来关闭“每 N 步保存”的逻辑
-SAVE_TOP_K=5
-SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
-SAVE_TOP_K_GREATER_IS_BETTER=true
-SAVE_RESUME_STEPS=20 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
-LOGGING_STEPS=3 # 训练日志记录步数间隔（配合 logging_strategy=steps）
+# 清理数据集缓存目录
+DATASET_CACHE_DIR="/run/determined/NAS1/public/xuexiang/dataset/processes-dolly-15k/default"
+if [ -d "$DATASET_CACHE_DIR" ]; then
+    echo "Removing cached dataset dir: $DATASET_CACHE_DIR"
+    rm -rf "$DATASET_CACHE_DIR"
+fi
+
+num_generations=8
+EXP_TYPE=intuitor          # 本脚本用于开放任务 RL，固定为 intuitor
+MAX_STEPS=-1               # 可选 -1 或者具体步数
+START_VLLM=true            # true: 1卡 vLLM + 3卡训练；false: 4卡训练
+SAVE_TOTAL_LIMIT=20        # 控制最多保留的 checkpoint 数量
+SAVE_STEPS=20              # 保存间隔（step 数）
 
 # GPU 分配策略
 # - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
@@ -51,37 +54,25 @@ if [ "$START_VLLM" = true ]; then
     VLLM_DEVICE="0"
     CUDA_DEVICES="1,2,3"
     NUM_PROCESSES=3
-    BATCH_SIZE=4
-    GRAD_ACCUM=32
-    lr=1e-6
-    beta=0.01   # kl penalty
+    BATCH_SIZE=32
+    GRAD_ACCUM=4
+    lr=3.0e-06
 else
     VLLM_DEVICE=""
     CUDA_DEVICES="0,1,2,3"
     NUM_PROCESSES=4
     BATCH_SIZE=3
     GRAD_ACCUM=32
-    lr=1e-6
-    beta=0.001   # kl penalty
+    lr=3.0e-06
 fi
 
-# 根据实验类型设置脚本和配置
-if [ "$EXP_TYPE" = "grpo" ]; then
-    SCRIPT_PATH="src/open_r1/grpo.py"
-    CONFIG_FILE="recipes/Qwen2.5-3B/grpo/config_demo.yaml"
-    WANDB_PROJECT="open-r1-grpo_qwen2.5-3B"
-    RUN_NAME="Qwen2.5-GRPO-3B"
-    LOG_PREFIX="grpo"
-    BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-GRPO-3B"
-else
-    SCRIPT_PATH="src/open_r1/intuitor.py"
-    CONFIG_FILE="recipes/Qwen2.5-3B/intuitor/config_demo.yaml"     
-    WANDB_PROJECT="open-r1-intuitor_qwen2.5-3B"
-    RUN_NAME="Qwen2.5-Intuitor-3B"
-    LOG_PREFIX="intuitor"
-    BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B"
-fi
-
+# 配置路径与输出目录
+SCRIPT_PATH="src/open_r1/intuitor.py"
+CONFIG_FILE="recipes/Qwen2.5-3B/intuitor/config_open_data_demo.yaml"
+WANDB_PROJECT="open-r1-intuitor_qwen2.5-3B-open-data"
+RUN_NAME="Qwen2.5-Intuitor-3B-open-data"
+LOG_PREFIX="intuitor-open-data"
+BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-open-data"
 
 # 创建日志/输出目录 + 续跑逻辑
 if [ "$RESUME_MODE" = true ]; then
@@ -90,7 +81,6 @@ if [ "$RESUME_MODE" = true ]; then
     PROJECT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
     LOG_DIR="${PROJECT_DIR}/logs"
     OUTPUT_DIR="${PROJECT_DIR}/ckpt"
-    RESUME_FROM_CHECKPOINT="${OUTPUT_DIR}/checkpoint-last"
     if [ -n "$WANDB_RUN_ID" ]; then
         echo "[RESUME] WANDB_RUN_ID=$WANDB_RUN_ID, WANDB_RESUME=$WANDB_RESUME"
     else
@@ -102,7 +92,6 @@ else
     PROJECT_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
     LOG_DIR="${PROJECT_DIR}/logs"
     OUTPUT_DIR="${PROJECT_DIR}/ckpt"
-    RESUME_FROM_CHECKPOINT=""
     unset WANDB_RESUME
     unset WANDB_RUN_ID
     unset RESUME_TIMESTAMP
@@ -134,7 +123,6 @@ CUDA_DEVICES: $CUDA_DEVICES
 BATCH_SIZE: $BATCH_SIZE
 GRAD_ACCUM: $GRAD_ACCUM
 lr: $lr
-beta: $beta
 SCRIPT_PATH: $SCRIPT_PATH
 CONFIG_FILE: $CONFIG_FILE
 WANDB_PROJECT: $WANDB_PROJECT
@@ -147,16 +135,12 @@ OUTPUT_DIR: $OUTPUT_DIR
 PROJECT_DIR: $PROJECT_DIR
 START_VLLM: $START_VLLM
 SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT
-SAVE_STRATEGY: $SAVE_STRATEGY
-SAVE_TOP_K: $SAVE_TOP_K
-SAVE_TOP_K_METRIC: $SAVE_TOP_K_METRIC
-SAVE_TOP_K_GREATER_IS_BETTER: $SAVE_TOP_K_GREATER_IS_BETTER
-SAVE_RESUME_STEPS: $SAVE_RESUME_STEPS
-LOGGING_STEPS: $LOGGING_STEPS
 RESUME_MODE: $RESUME_MODE
-RESUME_FROM_CHECKPOINT: $RESUME_FROM_CHECKPOINT
 WANDB_RUN_ID: $WANDB_RUN_ID
 RESUME_TIMESTAMP: $RESUME_TIMESTAMP
+dataset_name: /run/determined/NAS1/public/xuexiang/dataset/processes-dolly-15k
+dataset_prompt_column: prompt
+dataset_config: default
 ========================
 EOF
 printf "%s\n" "$RUN_CONFIG"
@@ -166,7 +150,6 @@ printf "%s\n" "$RUN_CONFIG" > "${LOG_DIR}/config_params.log"
 nohup bash scripts/gpu_monitor.sh 5 "gpu_usage" "${LOG_DIR}" > /dev/null 2>&1 &
 MONITOR_PID=$!
 echo "GPU监控已启动 PID: $MONITOR_PID"
-
 
 # 启动 vLLM（可选）
 if [ "$START_VLLM" = true ]; then
@@ -185,35 +168,17 @@ EXTRA_ARGS=""
 if [ "$START_VLLM" != true ]; then
   EXTRA_ARGS="--use_vllm false"
 fi
-RESUME_ARGS=""
-if [ "$RESUME_MODE" = true ]; then
-  if [ ! -d "$RESUME_FROM_CHECKPOINT" ]; then
-    echo "[ERROR] RESUME_MODE=true 但 checkpoint-last 不存在: $RESUME_FROM_CHECKPOINT" >&2
-    exit 1
-  fi
-  RESUME_ARGS="--resume_from_checkpoint $RESUME_FROM_CHECKPOINT"
-fi
 
-# 启动训练脚本，默认的是24g版本，num_processes=7；为3的时候就使用48g显存
-# Mirror training log to terminal
-touch "$RUN_LOG_FILE"
-tail -n 0 -F "$RUN_LOG_FILE" &
-TAIL_PID=$!
+# 启动训练
 nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=$NUM_PROCESSES \
     $SCRIPT_PATH \
-    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --beta $beta --max_steps $MAX_STEPS --logging_steps $LOGGING_STEPS \
+    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
-    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_only_model true --save_total_limit $SAVE_TOTAL_LIMIT \
-    --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER --save_resume_steps $SAVE_RESUME_STEPS \
-    $RESUME_ARGS $EXTRA_ARGS \
+    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT --save_steps $SAVE_STEPS $EXTRA_ARGS \
     > "$RUN_LOG_FILE" 2>&1 &
 TRAINING_PID=$!
 wait $TRAINING_PID
-if [ -n "${TAIL_PID:-}" ]; then
-    kill "$TAIL_PID" 2>/dev/null
-    wait "$TAIL_PID" 2>/dev/null
-fi
 echo "Training process started with PID: $TRAINING_PID"
 
 echo "Both processes started in the background. Check ${LOG_DIR}/vllm-server.log and ${RUN_LOG_FILE} for output."

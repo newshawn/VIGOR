@@ -131,8 +131,16 @@ if [[ "$RUN_MODE" != "local" && "$RUN_MODE" != "det" ]]; then
   exit 1
 fi
 
+if [[ ! -e "$WATCH_DIR" ]]; then
+  echo "Watch directory does not exist; creating: $WATCH_DIR" >&2
+  if ! mkdir -p "$WATCH_DIR"; then
+    echo "Failed to create watch directory: $WATCH_DIR" >&2
+    exit 1
+  fi
+fi
+
 if [[ ! -d "$WATCH_DIR" ]]; then
-  echo "Watch directory does not exist: $WATCH_DIR" >&2
+  echo "Watch path is not a directory: $WATCH_DIR" >&2
   exit 1
 fi
 

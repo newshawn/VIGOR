@@ -48,6 +48,11 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+from transformers.trainer_callback import ExportableState
+try:
+    from transformers.trainer_utils import TRAINER_STATE_NAME
+except ImportError:  # transformers<4.53
+    from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
 from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
@@ -74,6 +79,18 @@ if is_liger_kernel_available():
 
 if is_wandb_available():
     import wandb
+
+try:
+    from torch.utils.tensorboard import SummaryWriter as _TorchSummaryWriter  # type: ignore
+except Exception:  # pragma: no cover
+    _TorchSummaryWriter = None
+
+try:
+    from tensorboardX import SummaryWriter as _TBXSummaryWriter  # type: ignore
+except Exception:  # pragma: no cover
+    _TBXSummaryWriter = None
+
+_SummaryWriter = _TorchSummaryWriter or _TBXSummaryWriter
 
 try:
     import matplotlib
@@ -417,6 +434,18 @@ class INTUITORTrainer(Trainer):
             model_name = model_name.split("/")[-1]
             args = GRPOConfig(f"{model_name}-GRPO")
 
+        report_to = getattr(args, "report_to", None)
+        if report_to == "all":
+            os.environ.setdefault("WANDB_MODE", "offline")
+        else:
+            report_to_values = set()
+            if isinstance(report_to, str):
+                report_to_values.add(report_to)
+            elif report_to:
+                report_to_values.update(report_to)
+            if "wandb" in report_to_values:
+                os.environ.setdefault("WANDB_MODE", "offline")
+
         # Models
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
@@ -479,6 +508,8 @@ class INTUITORTrainer(Trainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+        else:
+            processing_class.padding_side = "left"
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
@@ -628,6 +659,10 @@ class INTUITORTrainer(Trainer):
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         self._wandb_artifact_logged = False
+        self._tb_writer = None
+        self._tb_log_dir: Optional[str] = None
+        self._tb_warning_emitted = False
+        self._maybe_init_tensorboard_writer()
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
         maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.gradient_accumulation_steps
@@ -656,6 +691,9 @@ class INTUITORTrainer(Trainer):
         self._kl_plot_buffer = {
             "prompt": deque(maxlen=maxlen),
             "kl_reward_norm": deque(maxlen=maxlen),
+            "completion_length": deque(maxlen=maxlen),
+            "repeat_ngram3": deque(maxlen=maxlen),
+            "accuracy_reward": deque(maxlen=maxlen),
         }
         self._kl_plot_dir = Path(self.args.output_dir).resolve() / "kl_reward_plots"
         self._last_kl_plot_step = -1
@@ -669,6 +707,13 @@ class INTUITORTrainer(Trainer):
         self._last_prompt_dump_step = -1
         if self.prompt_dump_enabled and self.accelerator.is_main_process:
             self._prompt_dump_dir.mkdir(parents=True, exist_ok=True)
+        self.save_top_k = max(0, int(getattr(args, "save_top_k", 0) or 0))
+        self.save_top_k_metric = (getattr(args, "save_top_k_metric", None) or "").strip()
+        self.save_top_k_greater_is_better = bool(getattr(args, "save_top_k_greater_is_better", True))
+        self._top_k_checkpoints: list[dict[str, Any]] = []
+        self._last_top_k_step = -1
+        self.save_resume_steps = max(0, int(getattr(args, "save_resume_steps", 0) or 0))
+        self._last_resume_step = -1
 
         # Check if the effective batch size can be divided by the number of generations
         if self.num_generations < 2:
@@ -888,7 +933,9 @@ class INTUITORTrainer(Trainer):
     def _get_last_hidden_state(self, model, input_ids, attention_mask, logits_to_keep=None):
         # unwrap the model to access the model.model
         unwrapped_model = self.accelerator.unwrap_model(model)
-        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        last_hidden_state = unwrapped_model.model(
+            input_ids=input_ids, attention_mask=attention_mask, use_cache=False
+        ).last_hidden_state
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
@@ -905,7 +952,10 @@ class INTUITORTrainer(Trainer):
 
             # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
             logits = model(
-                input_ids=input_ids_batch, attention_mask=attention_mask_batch, logits_to_keep=logits_to_keep + 1
+                input_ids=input_ids_batch,
+                attention_mask=attention_mask_batch,
+                logits_to_keep=logits_to_keep + 1,
+                use_cache=False,
             ).logits
             logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
             input_ids_batch = input_ids_batch[:, -logits_to_keep:]
@@ -999,6 +1049,7 @@ class INTUITORTrainer(Trainer):
                         input_ids=single_input_ids,
                         attention_mask=single_attention_mask,
                         labels=single_labels,
+                        use_cache=False,
                     )
                     loss = outputs.loss
                 loss = loss.float()
@@ -1017,15 +1068,19 @@ class INTUITORTrainer(Trainer):
             #     grad_norm_sq += grad.float().pow(2).sum()
 
             # approx_kl = 0.5 * eta_sq * grad_norm_sq
+            token_mask = single_labels[:, 1:].ne(-100)  # 对齐到 logits[:, :-1, :]
+            if getattr(self.args, "kl_reward_sqrt_len_scaling_enabled", True):
+                eff_len = token_mask.sum().to(device=model_device, dtype=grad_norm.dtype)
+                grad_norm = grad_norm * torch.sqrt(eff_len.clamp_min(1))
             approx_kl = grad_norm
             rewards.append((-approx_kl).squeeze(0))
-
+            # import pdb; pdb.set_trace()
             # 提前 detach logits 并释放 outputs，减少显存滞留
             logits_detached = outputs.logits.detach() if outputs.logits is not None else None
             del outputs
 
             # 计算 completion 的平均熵（只统计标签为有效 token 的位置）
-            token_mask = single_labels[:, 1:].ne(-100)  # 对齐到 logits[:, :-1, :]
+            
             comp_len = int(token_mask.sum().item())
             # 为避免保留计算图，熵计算在 no_grad 下进行，并先 detach logits
             if comp_len > 0 and logits_detached is not None:
@@ -1346,7 +1401,7 @@ class INTUITORTrainer(Trainer):
                     else:
                         texts = [p + c for p, c in zip(prompts, completions)]
                     reward_inputs = reward_processing_class(
-                        text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                        text=texts, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
                     )
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
@@ -1436,17 +1491,19 @@ class INTUITORTrainer(Trainer):
         # === KL 奖励归一：按每个 prompt 内（可含熵惩罚的）kl_rewards 做 rank，映射到 [-1, 1] ===
         # kl_rewards_by_prompt 为负数，绝对值越小（越靠近 0）表示梯度越小 → 奖励越高
         # 按值升序排序：最负的 rank 最低，最接近 0 的 rank 最高
-        rank_idx = kl_rewards_by_prompt.argsort(dim=1, stable=True)
-        ranks = rank_idx.argsort(dim=1, stable=True).float()  # [num_prompt, num_generations] 数值越大越“好”
-        if self.num_generations > 1:
-            ranks = (ranks / (self.num_generations - 1)) * 2.0 - 1.0
+        if getattr(self.args, "kl_reward_rank_normalization_enabled", True):
+            rank_idx = kl_rewards_by_prompt.argsort(dim=1, stable=True)
+            ranks = rank_idx.argsort(dim=1, stable=True).float()  # [num_prompt, num_generations] 数值越大越“好”
+            if self.num_generations > 1:
+                ranks = (ranks / (self.num_generations - 1)) * 2.0 - 1.0
+            else:
+                ranks = torch.zeros_like(ranks)
+            kl_rewards_norm_flat = ranks.reshape(-1)  # shape=[num_prompt*num_generations*num_device]
         else:
-            ranks = torch.zeros_like(ranks)
-
-        kl_rewards_norm_flat = ranks.reshape(-1)  # shape=[num_prompt*num_generations*num_device]
+            kl_rewards_norm_flat = kl_rewards_by_prompt.reshape(-1)
         gathered_kl_rewards = kl_rewards_norm_flat
 
-        kl_rewards_norm_for_logging = kl_rewards_norm_flat.detach().cpu().tolist()  # 保存离散化后的 KL 奖励用于文本日志
+        kl_rewards_norm_for_logging = kl_rewards_norm_flat.detach().cpu().tolist()  # 保存 KL 奖励用于文本日志
         # === 任务奖励聚合与优势计算（这里只有accuracy_reward，weight=0，不用于优化） ===    
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
@@ -1499,6 +1556,26 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["completions/mean_length"].append(agg_completion_mask.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_mask.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_mask.float().max().item())
+        # repetition collapse diagnostics using n-gram repetition ratio (higher means more repetition)
+        def _ngram_repetition_ratio(token_ids, n=3):
+            if len(token_ids) < n:
+                return 0.0
+            ngrams = [tuple(token_ids[i : i + n]) for i in range(len(token_ids) - n + 1)]
+            return 1.0 - (len(set(ngrams)) / len(ngrams))
+
+        completion_ids_cpu = completion_ids.detach().cpu()
+        completion_mask_cpu = completion_mask.detach().cpu().bool()
+        rep_ratios = []
+        for ids, mask in zip(completion_ids_cpu, completion_mask_cpu):
+            token_ids = ids[mask].tolist()
+            rep_ratios.append(_ngram_repetition_ratio(token_ids, n=3))
+        rep_ratios = torch.tensor(rep_ratios, device=device)
+        agg_rep_ratios = self.accelerator.gather_for_metrics(rep_ratios)
+        self._metrics[mode]["completions/repeat_ngram3_mean"].append(agg_rep_ratios.mean().item())
+        self._metrics[mode]["completions/repeat_ngram3_max"].append(agg_rep_ratios.max().item())
+        self._metrics[mode]["completions/repeat_ngram3_collapse_rate"].append(
+            (agg_rep_ratios >= 0.5).float().mean().item()
+        )
 
         # identify sequences that terminated with EOS and log their lengths
         agg_terminated_with_eos = self.accelerator.gather_for_metrics(is_eos.any(dim=1))
@@ -1535,12 +1612,45 @@ class INTUITORTrainer(Trainer):
         self._metrics[mode]["rewards/kl_entropy_weight/mean"].append(entropy_weight_mean_record)
         self._metrics[mode]["rewards/kl_entropy_weight/std"].append(entropy_weight_std_record)
         self._metrics[mode]["rewards/kl_entropy_focal_lambda"].append(focal_lambda_record)
+        # Alignment diagnostics: accuracy on high self-certainty subset vs overall.
+        # Use kl_rewards_norm_flat as a proxy for SCE when selecting top-25% within each prompt group.
+        acc_idx = next((i for i, name in enumerate(self.reward_func_names) if "accuracy" in name), None)
+        if acc_idx is not None:
+            acc = rewards_per_func[:, acc_idx]
+            valid_mask = ~torch.isnan(acc)
+            if valid_mask.any():
+                acc_valid = acc[valid_mask]
+                self._metrics[mode]["align/acc_overall"].append(acc_valid.float().mean().item())
+                acc_grouped = acc.detach().cpu().view(-1, self.num_generations)
+                kl_grouped = kl_rewards_norm_flat.detach().cpu().view(-1, self.num_generations)
+                valid_grouped = valid_mask.detach().cpu().view(-1, self.num_generations)
+                high_acc_values = []
+                for acc_row, kl_row, valid_row in zip(acc_grouped, kl_grouped, valid_grouped):
+                    valid_idx = valid_row.nonzero(as_tuple=False).squeeze(-1)
+                    if valid_idx.numel() == 0:
+                        continue
+                    num_valid = valid_idx.numel()
+                    top_k = max(1, (num_valid + 3) // 4)  # ceil(0.25 * num_valid)
+                    kl_valid = kl_row[valid_idx]
+                    _, topk_pos = torch.topk(kl_valid, top_k)
+                    acc_top = acc_row[valid_idx[topk_pos]]
+                    high_acc_values.append(acc_top)
+                if high_acc_values:
+                    acc_high = torch.cat(high_acc_values)
+                    self._metrics[mode]["align/acc_high_sce_top25"].append(acc_high.float().mean().item())
+                    self._metrics[mode]["align/wrong_high_sce_rate_top25"].append(
+                        (acc_high <= 0).float().mean().item()
+                    )
         # 监测 kl 的 advantage的平均值，为0才正常
         self._metrics[mode]["advantages/kl_mean_advantage"].append(self.accelerator.gather_for_metrics(kl_advantage).nanmean().item())
         self._metrics[mode]["advantages/total_mean_advantage"].append(self.accelerator.gather_for_metrics(total_advantage).nanmean().item())
         # Log prompt and completion texts
         gathered_prompts = gather_object(prompts_text)
         gathered_completions = gather_object(completions_text)
+        if gathered_prompts and isinstance(gathered_prompts[0], (list, tuple)):
+            gathered_prompts = [prompt for group in gathered_prompts for prompt in group]
+        if gathered_completions and isinstance(gathered_completions[0], (list, tuple)):
+            gathered_completions = [completion for group in gathered_completions for completion in group]
         self._textual_logs["prompt"].extend(gathered_prompts)
         self._textual_logs["completion"].extend(gathered_completions)
         self._textual_logs["entropy"].extend(gathered_entropies.detach().cpu().tolist())
@@ -1549,6 +1659,13 @@ class INTUITORTrainer(Trainer):
         if mode == "train" and self.kl_reward_plot_enabled:
             self._kl_plot_buffer["prompt"].extend(gathered_prompts)
             self._kl_plot_buffer["kl_reward_norm"].extend(kl_rewards_norm_for_logging)
+            self._kl_plot_buffer["completion_length"].extend(agg_completion_mask.detach().cpu().tolist())
+            self._kl_plot_buffer["repeat_ngram3"].extend(agg_rep_ratios.detach().cpu().tolist())
+            if acc_idx is not None:
+                acc_values_for_plot = rewards_per_func[:, acc_idx].detach().cpu().tolist()
+            else:
+                acc_values_for_plot = [float("nan")] * len(agg_completion_mask)
+            self._kl_plot_buffer["accuracy_reward"].extend(acc_values_for_plot)
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
@@ -1653,6 +1770,168 @@ class INTUITORTrainer(Trainer):
             loss = loss.mean().detach()
         return loss, None, None
 
+    def _save_resume_checkpoint(self, model, trial) -> None:
+        checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), "checkpoint-last")
+        if self.args.should_save and os.path.isdir(checkpoint_dir):
+            shutil.rmtree(checkpoint_dir, ignore_errors=True)
+        if hasattr(self, "accelerator"):
+            self.accelerator.wait_for_everyone()
+
+        self.save_model(checkpoint_dir, _internal_call=True)
+        self._save_optimizer_and_scheduler(checkpoint_dir)
+        self._save_scaler(checkpoint_dir)
+        self._save_rng_state(checkpoint_dir)
+
+        if self.args.should_save:
+            for cb in [
+                cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)
+            ]:
+                cb_name = cb.__class__.__name__
+                cb_state = cb.state()
+                if isinstance(self.state.stateful_callbacks[cb_name], list):
+                    self.state.stateful_callbacks[cb_name].append(cb_state)
+                else:
+                    self.state.stateful_callbacks[cb_name] = cb_state
+            self.state.save_to_json(os.path.join(checkpoint_dir, TRAINER_STATE_NAME))
+
+    def _maybe_save_resume_checkpoint(self, model, trial) -> None:
+        if self.save_resume_steps <= 0:
+            return
+        step = int(self.state.global_step)
+        if step <= 0 or step == self._last_resume_step:
+            return
+        if step % self.save_resume_steps != 0:
+            return
+        self._save_resume_checkpoint(model, trial)
+        self._last_resume_step = step
+
+    def _maybe_save_top_k_checkpoint(self, logs: dict[str, float]) -> None:
+        if self.save_top_k <= 0:
+            return
+        if not self.save_top_k_metric:
+            return
+        if not self.is_world_process_zero():
+            return
+        metric_value = logs.get(self.save_top_k_metric)
+        if metric_value is None and not self.save_top_k_metric.startswith("eval_"):
+            metric_value = logs.get(f"eval_{self.save_top_k_metric}")
+        if metric_value is None:
+            return
+        try:
+            metric_value = float(metric_value)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(metric_value):
+            return
+        step = int(self.state.global_step)
+        if step <= 0 or step == self._last_top_k_step:
+            return
+
+        def is_better(new_metric: float, new_step: int, ref: dict[str, Any]) -> bool:
+            if self.save_top_k_greater_is_better:
+                return new_metric > ref["metric"] or (new_metric == ref["metric"] and new_step > ref["step"])
+            return new_metric < ref["metric"] or (new_metric == ref["metric"] and new_step > ref["step"])
+
+        def worst_checkpoint() -> dict[str, Any]:
+            if self.save_top_k_greater_is_better:
+                return min(self._top_k_checkpoints, key=lambda x: (x["metric"], x["step"]))
+            return max(self._top_k_checkpoints, key=lambda x: (x["metric"], -x["step"]))
+
+        if self._top_k_checkpoints:
+            if len(self._top_k_checkpoints) >= self.save_top_k:
+                worst = worst_checkpoint()
+                if not is_better(metric_value, step, worst):
+                    return
+
+        checkpoint_dir = os.path.join(self.args.output_dir, f"checkpoint-{step}")
+        self.save_model(checkpoint_dir)
+        self._top_k_checkpoints.append({"step": step, "metric": metric_value, "path": checkpoint_dir})
+        self._last_top_k_step = step
+
+        if len(self._top_k_checkpoints) > self.save_top_k:
+            worst = worst_checkpoint()
+            self._top_k_checkpoints.remove(worst)
+            if os.path.isdir(worst["path"]):
+                shutil.rmtree(worst["path"], ignore_errors=True)
+
+    def _has_tensorboard_callback(self) -> bool:
+        handler = getattr(self, "callback_handler", None)
+        callbacks = getattr(handler, "callbacks", []) if handler is not None else []
+        return any(cb.__class__.__name__ == "TensorBoardCallback" for cb in callbacks)
+
+    def _maybe_init_tensorboard_writer(self) -> None:
+        if self._tb_writer is not None:
+            return
+        if not self.accelerator.is_main_process:
+            return
+        # Avoid double-logging when users already enabled the Transformers TensorBoard integration.
+        if self._has_tensorboard_callback():
+            return
+        if _SummaryWriter is None:
+            if not self._tb_warning_emitted:
+                self.accelerator.print(
+                    "[TensorBoard] Disabled because 'tensorboard' is not installed. "
+                    "Install it with `pip install tensorboard`."
+                )
+                self._tb_warning_emitted = True
+            return
+
+        log_dir = getattr(self.args, "logging_dir", None) or os.path.join(self.args.output_dir, "runs")
+        try:
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
+            self._tb_writer = _SummaryWriter(log_dir=str(log_dir))
+            self._tb_log_dir = str(log_dir)
+            self.accelerator.print(f"[TensorBoard] Writing scalars to {self._tb_log_dir}")
+        except Exception as exc:  # pragma: no cover
+            self._tb_writer = None
+            self._tb_log_dir = None
+            self.accelerator.print(f"[TensorBoard] Failed to initialize SummaryWriter: {exc}")
+
+    @staticmethod
+    def _coerce_to_scalar(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float, np.number)):
+            return float(value)
+        if isinstance(value, torch.Tensor):
+            if value.numel() != 1:
+                return None
+            return float(value.detach().cpu().item())
+        if isinstance(value, np.ndarray):
+            if value.size != 1:
+                return None
+            return float(np.asarray(value).reshape(()).item())
+        return None
+
+    def _maybe_log_tensorboard_scalars(self, logs: dict[str, Any]) -> None:
+        if not self.accelerator.is_main_process:
+            return
+        writer = self._tb_writer
+        if writer is None:
+            return
+        step = int(getattr(self.state, "global_step", 0) or 0)
+        for key, value in logs.items():
+            scalar = self._coerce_to_scalar(value)
+            if scalar is None:
+                continue
+            writer.add_scalar(str(key), scalar, step)
+        writer.flush()
+
+    def _maybe_log_save_evaluate(
+        self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time, learning_rate=None
+    ):
+        super()._maybe_log_save_evaluate(
+            tr_loss,
+            grad_norm,
+            model,
+            trial,
+            epoch,
+            ignore_keys_for_eval,
+            start_time,
+            learning_rate=learning_rate,
+        )
+        self._maybe_save_resume_checkpoint(model, trial)
+
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
@@ -1667,7 +1946,9 @@ class INTUITORTrainer(Trainer):
             super().log(logs, start_time)
         else:  # transformers<=4.46
             super().log(logs)
+        self._maybe_log_tensorboard_scalars(logs)
         self._metrics[mode].clear()
+        self._maybe_save_top_k_checkpoint(logs)
 
         # 在 wandb run 初始化后尽早上传代码快照，且只上传一次
         if not self._wandb_artifact_logged:
@@ -1775,14 +2056,6 @@ class INTUITORTrainer(Trainer):
         if not self.kl_reward_plot_enabled:
             self._clear_reward_plot_buffer()
             return
-        if plt is None:
-            if not self._kl_plot_warning_emitted:
-                warnings.warn(
-                    "matplotlib is not available in this environment; disabling reward plotting."
-                )
-                self._kl_plot_warning_emitted = True
-            self._clear_reward_plot_buffer()
-            return
         if not self.accelerator.is_main_process:
             self._clear_reward_plot_buffer()
             return
@@ -1800,8 +2073,25 @@ class INTUITORTrainer(Trainer):
 
         prompts = list(self._kl_plot_buffer["prompt"])
         kl_rewards_norm = list(self._kl_plot_buffer["kl_reward_norm"])
+        completion_lengths = list(self._kl_plot_buffer.get("completion_length", []))
+        repeat_ratios = list(self._kl_plot_buffer.get("repeat_ngram3", []))
+        acc_values = list(self._kl_plot_buffer.get("accuracy_reward", []))
         try:
-            if kl_rewards_norm:
+            self._maybe_log_sce_bin_summary(
+                step,
+                prompts,
+                kl_rewards_norm,
+                completion_lengths,
+                repeat_ratios,
+                acc_values,
+            )
+            if plt is None:
+                if not self._kl_plot_warning_emitted:
+                    warnings.warn(
+                        "matplotlib is not available in this environment; disabling reward plotting."
+                    )
+                    self._kl_plot_warning_emitted = True
+            elif kl_rewards_norm:
                 if len(prompts) != len(kl_rewards_norm):
                     warnings.warn("Prompt/KL buffer size mismatch; skipping KL reward plot for this step.")
                 else:
@@ -1817,6 +2107,195 @@ class INTUITORTrainer(Trainer):
             warnings.warn(f"Failed to save reward plot at step {step}: {exc}")
         finally:
             self._clear_reward_plot_buffer()
+
+    def _maybe_log_sce_bin_summary(
+        self,
+        step: int,
+        prompts: list[Any],
+        kl_values: list[float],
+        completion_lengths: list[float],
+        repeat_ratios: list[float],
+        acc_values: list[float],
+    ) -> None:
+        summary, valid_groups, total_groups = self._build_sce_bin_summary(
+            prompts,
+            kl_values,
+            completion_lengths,
+            repeat_ratios,
+            acc_values,
+        )
+        if total_groups > 0:
+            percent = 100.0 * valid_groups / total_groups
+            self.accelerator.print(
+                f"[SCE bins] Using {valid_groups}/{total_groups} prompt groups ({percent:.1f}%)."
+            )
+        if not summary:
+            return
+
+        columns = [
+            "step",
+            "bin",
+            "bin_label",
+            "completion_length_mean",
+            "repeat_ngram3_mean",
+            "repeat_ngram3_max",
+            "repeat_ngram3_collapse_rate",
+            "accuracy_reward_mean",
+        ]
+        data = [
+            [
+                step,
+                row["bin"],
+                row["bin_label"],
+                row["completion_length_mean"],
+                row["repeat_ngram3_mean"],
+                row["repeat_ngram3_max"],
+                row["repeat_ngram3_collapse_rate"],
+                row["accuracy_reward_mean"],
+            ]
+            for row in summary
+        ]
+        if is_wandb_available() and wandb.run is not None:
+            wandb.log({"sce_bin_summary": wandb.Table(columns=columns, data=data)})
+        if plt is not None:
+            self._save_sce_bin_plot(step, summary)
+
+    def _build_sce_bin_summary(
+        self,
+        prompts: list[Any],
+        kl_values: list[float],
+        completion_lengths: list[float],
+        repeat_ratios: list[float],
+        acc_values: list[float],
+    ) -> tuple[list[dict[str, float]], int, int]:
+        group_size = self.num_generations
+        if group_size <= 0:
+            return [], 0, 0
+        total_prompt_groups = len(prompts) // group_size
+        if total_prompt_groups <= 0:
+            return [], 0, total_prompt_groups
+
+        valid_kl: list[list[float]] = []
+        valid_len: list[list[float]] = []
+        valid_rep: list[list[float]] = []
+        valid_acc: list[list[float]] = []
+        for group_idx in range(total_prompt_groups):
+            start = group_idx * group_size
+            end = start + group_size
+            if (
+                end > len(kl_values)
+                or end > len(completion_lengths)
+                or end > len(repeat_ratios)
+                or end > len(acc_values)
+            ):
+                continue
+            group_prompts = prompts[start:end]
+            if not group_prompts:
+                continue
+            first_prompt = group_prompts[0]
+            if not all(prompt == first_prompt for prompt in group_prompts):
+                continue
+            valid_kl.append(kl_values[start:end])
+            valid_len.append(completion_lengths[start:end])
+            valid_rep.append(repeat_ratios[start:end])
+            valid_acc.append(acc_values[start:end])
+
+        if not valid_kl:
+            return [], 0, total_prompt_groups
+
+        kl_tensor = torch.tensor(valid_kl, dtype=torch.float32)
+        len_tensor = torch.tensor(valid_len, dtype=torch.float32)
+        rep_tensor = torch.tensor(valid_rep, dtype=torch.float32)
+        acc_tensor = torch.tensor(valid_acc, dtype=torch.float32)
+
+        order = torch.argsort(kl_tensor, dim=1, stable=True)
+        summary: list[dict[str, float]] = []
+        for bin_idx in range(group_size):
+            idx = order[:, bin_idx].unsqueeze(1)
+            bin_lengths = torch.gather(len_tensor, 1, idx).squeeze(1)
+            bin_reps = torch.gather(rep_tensor, 1, idx).squeeze(1)
+            bin_accs = torch.gather(acc_tensor, 1, idx).squeeze(1)
+
+            length_mean = float(bin_lengths.mean().item()) if bin_lengths.numel() else float("nan")
+            rep_mean = float(bin_reps.mean().item()) if bin_reps.numel() else float("nan")
+            rep_max = float(bin_reps.max().item()) if bin_reps.numel() else float("nan")
+            collapse_rate = (
+                float((bin_reps >= 0.5).float().mean().item()) if bin_reps.numel() else float("nan")
+            )
+            if torch.isfinite(bin_accs).any():
+                acc_mean = float(torch.nanmean(bin_accs).item())
+            else:
+                acc_mean = float("nan")
+
+            bin_label = f"Bin {bin_idx}"
+            if bin_idx == 0:
+                bin_label += " (Lowest SCE)"
+            elif bin_idx == group_size - 1:
+                bin_label += " (Highest SCE)"
+
+            summary.append(
+                {
+                    "bin": int(bin_idx),
+                    "bin_label": bin_label,
+                    "completion_length_mean": length_mean,
+                    "repeat_ngram3_mean": rep_mean,
+                    "repeat_ngram3_max": rep_max,
+                    "repeat_ngram3_collapse_rate": collapse_rate,
+                    "accuracy_reward_mean": acc_mean,
+                }
+            )
+        return summary, len(valid_kl), total_prompt_groups
+
+    def _save_sce_bin_plot(self, step: int, summary: list[dict[str, float]]) -> None:
+        if not summary:
+            return
+        bins = [int(row["bin"]) for row in summary]
+        length_means = [row["completion_length_mean"] for row in summary]
+        rep_means = [row["repeat_ngram3_mean"] for row in summary]
+        rep_maxes = [row["repeat_ngram3_max"] for row in summary]
+        collapse_rates = [row["repeat_ngram3_collapse_rate"] for row in summary]
+        acc_means = [row["accuracy_reward_mean"] for row in summary]
+
+        fig, axes = plt.subplots(2, 3, figsize=(13, 6), constrained_layout=True)
+        axes = axes.flatten()
+
+        def plot_series(ax, values, title, ylabel, color, value_fmt: Optional[str] = None):
+            ax.plot(bins, values, marker="o", color=color)
+            ax.set_xticks(bins)
+            ax.set_xlabel("SCE Rank Bin (Low -> High)")
+            ax.set_title(title)
+            ax.set_ylabel(ylabel)
+            ax.grid(alpha=0.4, linestyle=":")
+            if value_fmt is None:
+                value_fmt = "{:.0f}" if ylabel == "Tokens" else "{:.3f}"
+            for x_val, y_val in zip(bins, values):
+                if not math.isfinite(y_val):
+                    continue
+                ax.annotate(
+                    value_fmt.format(y_val),
+                    (x_val, y_val),
+                    textcoords="offset points",
+                    xytext=(0, 6),
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                    color=color,
+                )
+
+        plot_series(axes[0], length_means, "Completion Length (mean)", "Tokens", "#1f77b4")
+        plot_series(axes[1], rep_means, "Repeat Ngram-3 (mean)", "Ratio", "#ff7f0e")
+        plot_series(axes[2], rep_maxes, "Repeat Ngram-3 (max)", "Ratio", "#d62728")
+        plot_series(axes[3], collapse_rates, "Repeat Ngram-3 (collapse rate)", "Rate", "#2ca02c")
+        plot_series(axes[4], acc_means, "Accuracy Reward (mean)", "Value", "#9467bd")
+        fig.delaxes(axes[5])
+
+        fig.suptitle(f"SCE {self.num_generations}-Bin Summary (step {step})", fontsize=12)
+        plot_dir = self._kl_plot_dir
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_path = plot_dir / f"sce_bin_summary_step_{step:06d}.png"
+        fig.savefig(plot_path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        self.accelerator.print(f"[SCE bins] Saved 8-bin summary plot to {plot_path}")
 
     def _save_reward_heatmap(
         self,

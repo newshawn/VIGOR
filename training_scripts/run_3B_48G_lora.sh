@@ -46,21 +46,21 @@ if [ "$START_VLLM" = true ]; then
     CUDA_DEVICES="1,2,3"
     NUM_PROCESSES=3
     BATCH_SIZE=4
-    GRAD_ACCUM=32
-    lr=3.0e-06
+    GRAD_ACCUM=8
+    lr=6.0e-7
 else
     VLLM_DEVICE=""
     CUDA_DEVICES="0,1,2,3"
     NUM_PROCESSES=4
-    BATCH_SIZE=3
-    GRAD_ACCUM=32
-    lr=3.0e-06
+    BATCH_SIZE=8
+    GRAD_ACCUM=16
+    lr=1.0e-06
 fi
 
 # 根据实验类型设置脚本和配置
 if [ "$EXP_TYPE" = "grpo" ]; then
     SCRIPT_PATH="src/open_r1/grpo.py"
-    CONFIG_FILE="recipes/Qwen2.5-3B/grpo/config_demo.yaml"
+    CONFIG_FILE="recipes/Qwen2.5-3B/grpo/3B_grpo_lora.yaml"
     WANDB_PROJECT="open-r1-grpo_qwen2.5-3B"
     RUN_NAME="Qwen2.5-GRPO-3B"
     LOG_PREFIX="grpo"
@@ -170,7 +170,7 @@ fi
 
 # 启动训练脚本，默认的是24g版本，num_processes=7；为3的时候就使用48g显存
 nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
-    accelerate launch --config_file recipes/accelerate_configs/zero3.yaml --num_processes=$NUM_PROCESSES \
+    accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=$NUM_PROCESSES \
     $SCRIPT_PATH \
     --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \

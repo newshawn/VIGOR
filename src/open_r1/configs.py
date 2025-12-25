@@ -46,7 +46,7 @@ class GRPOConfig(trl.GRPOConfig):
         },
     )
     kl_entropy_focal_lambda: float = field(
-        default=-0.25,
+        default=-0.5,
         metadata={
             "help": "Exponent lambda for entropy-based focal scaling of KL reward: weight=(1 - H_avg)^lambda. "
             "Use negative values to penalize over-confident (low-entropy) completions."
@@ -82,6 +82,18 @@ class GRPOConfig(trl.GRPOConfig):
         default=False,
         metadata={
             "help": "If True, apply entropy-based focal scal ing to KL rewards."
+        },
+    )
+    kl_reward_sqrt_len_scaling_enabled: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, scale KL grad norm by sqrt(effective completion length) before using as reward."
+        },
+    )
+    kl_reward_rank_normalization_enabled: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, rank-normalize KL rewards within each prompt group to the [-1, 1] range."
         },
     )
 
@@ -133,6 +145,30 @@ class GRPOConfig(trl.GRPOConfig):
     prompt_dump_max_prompts: int = field(
         default=100000,
         metadata={"help": "Maximum number of unique prompts to include in each dump snapshot."},
+    )
+    save_top_k: int = field(
+        default=0,
+        metadata={
+            "help": "Save the top-k checkpoints based on `save_top_k_metric`. Set to 0 to disable."
+        },
+    )
+    save_top_k_metric: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Metric key to rank checkpoints for top-k saving (e.g. 'rewards/accuracy_reward/mean')."
+        },
+    )
+    save_top_k_greater_is_better: bool = field(
+        default=True,
+        metadata={
+            "help": "If true, higher metric is better for top-k saving; otherwise lower is better."
+        },
+    )
+    save_resume_steps: int = field(
+        default=0,
+        metadata={
+            "help": "Save a full resume checkpoint to checkpoint-last every N steps; set to 0 to disable."
+        },
     )
 
 

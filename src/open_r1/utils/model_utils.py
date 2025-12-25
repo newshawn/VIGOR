@@ -13,6 +13,8 @@ def get_tokenizer(model_args: ModelConfig, training_args: SFTConfig | GRPOConfig
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
     )
+    # Qwen2 + FlashAttention2 requires left padding for batched generation/forward passes.
+    tokenizer.padding_side = "left"
 
     if training_args.chat_template is not None:
         tokenizer.chat_template = training_args.chat_template

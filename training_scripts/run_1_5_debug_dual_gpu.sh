@@ -6,7 +6,7 @@ which python
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 # unset http_proxy
 # unset https_proxy
-# clash on
+clash on
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
 export PATH=/usr/local/cuda-12.4/bin:${PATH}
 export CUDA_HOME=/usr/local/cuda-12.4
@@ -28,7 +28,7 @@ USE_WANDB=true               # true 开启 wandb，上报到 WANDB_PROJECT；fal
 MODE=debug                   # 固定为 debug 模式
 START_VLLM=false             # debug 强制关闭 vLLM
 NUM_PROCESSES=2
-BATCH_SIZE=6
+BATCH_SIZE=3
 GRAD_ACCUM=1
 lr=3.0e-06
 num_generations=3

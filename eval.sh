@@ -8,7 +8,7 @@
 
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/.venv_lighteval/bin/activate
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 # 确保 HF 本地缓存与离线模式（集群/无网环境使用本地缓存）
@@ -55,11 +55,17 @@ DEFAULT_MODEL=/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuito
 #   "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-grpo-3B_20251014_152032/checkpoint-40/"
 # )
 MODELS=(
-  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-130"    # 会自动加入该目录下所有 checkpoint-*
-  # "/run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B" # 也可填具体 checkpoint
-  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-140"
-  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-150"
-  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-156"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-130"    # 会自动加入该目录下所有 checkpoint-*
+  # # "/run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B" # 也可填具体 checkpoint
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-140"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-150"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251127_022509/ckpt/checkpoint-156"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251221_082957/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251221_083515/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-code_20251222_185707/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-code_20251222_112548/ckpt"
+  "/run/determined/NAS1/public/xuexiang/model/models--sunblaze-ucb--Qwen2.5-3B-Intuitor-MATH-1EPOCH/snapshots/bdb0b2fc48a80ab8906521ac55a4ce278a0538e5"
+  "/run/determined/NAS1/public/xuexiang/model/Qwen2.5-7B-Intuitor-MATH-1EPOCH"
 )
 
 
@@ -174,9 +180,10 @@ fi
 GPU_COUNT=${#GPU_LIST[@]}
 echo "可用 GPU 槽位（共 $GPU_COUNT 个）：${GPU_LIST[*]}"
 
-run_single_model() {
+run_single_task() {
   local MODEL="$1"
-  local GPU_LABEL="$2"
+  local TASK="$2"
+  local GPU_LABEL="$3"
 
   # 去除模型路径末尾的斜杠，避免 basename/dirname 解析偏差
   local MODEL_TRIMMED="${MODEL%/}"
@@ -204,74 +211,69 @@ run_single_model() {
 
   echo "[GPU $GPU_LABEL] === 评估参数 ==="
   echo "[GPU $GPU_LABEL] MODEL=$MODEL_TRIMMED"
+  echo "[GPU $GPU_LABEL] TASK=$TASK"
   echo "[GPU $GPU_LABEL] MODEL_ARGS=\"$MODEL_ARGS\""
   echo "[GPU $GPU_LABEL] OUTPUT_DIR=$OUTPUT_DIR"
   echo "[GPU $GPU_LABEL] 日志目录=$LOG_DIR"
   echo "[GPU $GPU_LABEL] ================="
 
   # 数据集缓存快速检查（避免离线环境报错定位困难）
-  local TASK
-  for TASK in "${TASKS[@]}"; do
-    case "$TASK" in
-      aime24)
-        local AIME_PATH_GLOB="$HF_DATASETS_CACHE/HuggingFaceH4___aime_2024/default" 
-        if ! ls -d "$AIME_PATH_GLOB" 1>/dev/null 2>&1; then
-          echo "[GPU $GPU_LABEL] ⚠️ 未检测到 aime_2024 本地缓存目录：$AIME_PATH_GLOB"
-          echo "[GPU $GPU_LABEL]    若在离线环境，请先在有网环境预下载该数据集（保持相同用户缓存路径）。"
-        fi
-        ;;
-      math_500)
-        local MATH_PATH_GLOB="$HF_DATASETS_CACHE/HuggingFaceH4___math-500/default"
-        if ! ls -d "$MATH_PATH_GLOB" 1>/dev/null 2>&1; then
-          echo "[GPU $GPU_LABEL] ⚠️ 未检测到 math_500 本地缓存目录：$MATH_PATH_GLOB"
-        fi
-        ;;
-    esac
-  done
+  case "$TASK" in
+    aime24)
+      local AIME_PATH_GLOB="$HF_DATASETS_CACHE/HuggingFaceH4___aime_2024/default"
+      if ! ls -d "$AIME_PATH_GLOB" 1>/dev/null 2>&1; then
+        echo "[GPU $GPU_LABEL] ⚠️ 未检测到 aime_2024 本地缓存目录：$AIME_PATH_GLOB"
+        echo "[GPU $GPU_LABEL]    若在离线环境，请先在有网环境预下载该数据集（保持相同用户缓存路径）。"
+      fi
+      ;;
+    math_500)
+      local MATH_PATH_GLOB="$HF_DATASETS_CACHE/HuggingFaceH4___math-500/default"
+      if ! ls -d "$MATH_PATH_GLOB" 1>/dev/null 2>&1; then
+        echo "[GPU $GPU_LABEL] ⚠️ 未检测到 math_500 本地缓存目录：$MATH_PATH_GLOB"
+      fi
+      ;;
+  esac
 
-  for TASK in "${TASKS[@]}"; do
-    echo "[GPU $GPU_LABEL] === 开始 $TASK ==="
+  echo "[GPU $GPU_LABEL] === 开始 $TASK ==="
 
-    # 默认 0-shot（mmlu_pro 也使用 0-shot）
-    local FEW_SHOT=0
+  # 默认 0-shot（mmlu_pro 也使用 0-shot）
+  local FEW_SHOT=0
 
-    local logfile_task="${TASK//\//_}"
-    local logfile="$LOG_DIR/${logfile_task}_${TIMESTAMP}.log"
-    # 对于 LiveCodeBench 扩展语法示例（以 extended| 前缀区分），否则默认使用 lighteval 套件名
-    if [[ "$TASK" == extended\|* ]]; then
-      lighteval vllm "$MODEL_ARGS" "$TASK|$FEW_SHOT" \
-        --output-dir "$OUTPUT_DIR" > "$logfile" 2>&1
-    else
-      lighteval vllm "$MODEL_ARGS" "lighteval|$TASK|$FEW_SHOT" \
-        --output-dir "$OUTPUT_DIR" > "$logfile" 2>&1
-    fi
-    local status=$?
-    if [ $status -ne 0 ]; then
-      echo "[GPU $GPU_LABEL] ⚠️ 任务 $TASK 失败，退出码 $status（详见日志 $logfile）"
-    else
-      echo "[GPU $GPU_LABEL] === $TASK 完成 ==="
-    fi
-  done
-
-  echo "[GPU $GPU_LABEL] === $MODEL_TRIMMED 全部任务完成 ==="
+  local logfile_task="${TASK//\//_}"
+  local logfile="$LOG_DIR/${logfile_task}_${TIMESTAMP}.log"
+  # 对于 LiveCodeBench 扩展语法示例（以 extended| 前缀区分），否则默认使用 lighteval 套件名
+  if [[ "$TASK" == extended\|* ]]; then
+    lighteval vllm "$MODEL_ARGS" "$TASK|$FEW_SHOT" \
+      --output-dir "$OUTPUT_DIR" > "$logfile" 2>&1
+  else
+    lighteval vllm "$MODEL_ARGS" "lighteval|$TASK|$FEW_SHOT" \
+      --output-dir "$OUTPUT_DIR" > "$logfile" 2>&1
+  fi
+  local status=$?
+  if [ $status -ne 0 ]; then
+    echo "[GPU $GPU_LABEL] ⚠️ 任务 $TASK 失败，退出码 $status（详见日志 $logfile）"
+  else
+    echo "[GPU $GPU_LABEL] === $TASK 完成 ==="
+  fi
 }
 
 declare -a GPU_PIDS=()
-declare -a GPU_MODELS=()
+declare -a GPU_JOBS=()
 
-start_model_on_gpu() {
+start_task_on_gpu() {
   local MODEL="$1"
-  local SLOT="$2"
+  local TASK="$2"
+  local SLOT="$3"
   local GPU_LABEL="${GPU_LIST[$SLOT]}"
 
   (
     export CUDA_VISIBLE_DEVICES="$GPU_LABEL"
-    run_single_model "$MODEL" "$GPU_LABEL"
+    run_single_task "$MODEL" "$TASK" "$GPU_LABEL"
   ) &
   local PID=$!
   GPU_PIDS[$SLOT]=$PID
-  GPU_MODELS[$SLOT]=$MODEL
-  echo ">>> 模型 $MODEL 分配到 GPU $GPU_LABEL (槽位 $SLOT)，PID=$PID"
+  GPU_JOBS[$SLOT]="$MODEL::$TASK"
+  echo ">>> TASK=$TASK MODEL=$MODEL assigned to GPU $GPU_LABEL (slot $SLOT), PID=$PID"
 }
 
 wait_for_slot() {
@@ -286,7 +288,7 @@ wait_for_slot() {
       if ! kill -0 "$PID" 2>/dev/null; then
         wait "$PID" 2>/dev/null
         GPU_PIDS[$SLOT]=""
-        GPU_MODELS[$SLOT]=""
+        GPU_JOBS[$SLOT]=""
         AVAILABLE_SLOT=$SLOT
         return
       fi
@@ -295,9 +297,20 @@ wait_for_slot() {
   done
 }
 
+declare -a JOB_MODELS=()
+declare -a JOB_TASKS=()
 for MODEL in "${MODELS_TO_RUN[@]}"; do
+  for TASK in "${TASKS[@]}"; do
+    JOB_MODELS+=("$MODEL")
+    JOB_TASKS+=("$TASK")
+  done
+done
+
+echo "Jobs to run: ${#JOB_TASKS[@]}"
+
+for idx in "${!JOB_MODELS[@]}"; do
   wait_for_slot
-  start_model_on_gpu "$MODEL" "$AVAILABLE_SLOT"
+  start_task_on_gpu "${JOB_MODELS[$idx]}" "${JOB_TASKS[$idx]}" "$AVAILABLE_SLOT"
 done
 
 # 等待所有后台任务完成

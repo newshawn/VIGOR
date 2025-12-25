@@ -1,0 +1,53 @@
+name: 10h_train_intuitor
+description: test
+workspace: ALL-IN-ONE
+project: Intuitor
+max_restarts: 0
+resources:
+  resource_pool: hop-80g-cq
+  slots_per_trial: 8
+  shm_size: 43597383683
+  is_single_node: true
+
+bind_mounts:
+  - host_path: /mount/HOME/wenxuexiang
+    container_path: /home/wenxuexiang
+    read_only: true
+  - host_path: /mount/localcq1/wenxuexiang # H800 本地硬盘
+    container_path: /run/determined/localcq1
+
+checkpoint_storage:
+  type: shared_fs
+  host_path: /mount/localcq1/wenxuexiang
+  storage_path: checkpoints
+  save_experiment_best: 0
+  save_trial_best: 1
+  save_trial_latest: 1
+
+profiling:
+  enabled: true
+
+searcher:
+  name: single
+  metric: validation_loss
+  max_length:
+      epochs: 1
+  smaller_is_better: true
+
+environment:
+  image: 100.94.63.23:8192/liangxiao:ubuntu22-04-cuda12.8-v3
+  environment_variables:
+    - http_proxy=http://172.17.0.1:7899
+    - https_proxy=http://172.17.0.1:7899
+    - HTTP_PROXY=http://172.17.0.1:7899
+    - HTTPS_PROXY=http://172.17.0.1:7899
+entrypoint: >
+  bash -lc "
+    source /run/determined/localcq1/miniconda3/etc/profile.d/conda.sh
+    
+    conda activate Intuitor
+    python -m pip install -q --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn matplotlib
+    which python
+    exec ./training_scripts/run_7B_80g.sh
+  "
+# entrypoint: /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/training_scripts/run_7B_80g.shhttps://pypi.tuna.tsinghua.e/

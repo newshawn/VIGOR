@@ -49,7 +49,15 @@ from open_r1.configs import SFTConfig
 from open_r1.utils import get_model, get_tokenizer
 from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
-from trl import ModelConfig, ScriptArguments, SFTTrainer, TrlParser, get_peft_config, setup_chat_format
+from trl import (
+    DataCollatorForCompletionOnlyLM,
+    ModelConfig,
+    ScriptArguments,
+    SFTTrainer,
+    TrlParser,
+    get_peft_config,
+    setup_chat_format,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -97,7 +105,44 @@ def main(script_args, training_args, model_args):
     # Load tokenizer
     ################
     tokenizer = get_tokenizer(model_args, training_args)
+    # 统一 response_template，便于后续掩蔽 prompt
+    response_template = getattr(training_args, "response_template", None) or "<|im_start|>assistant\n"
+    template_ids = tokenizer.encode(response_template, add_special_tokens=False)
+    logger.info("Response template: %s | token_ids=%s", repr(response_template), template_ids)
 
+    ##################################################
+    # Reformat Dolly-style fields -> chat-formatted text
+    ##################################################
+    columns = set(dataset[script_args.dataset_train_split].column_names)
+    if {"instruction", "response"} <= columns:
+        def _format_chat(example):
+            prompt = example.get("instruction") or ""
+            context = example.get("context") or ""
+            if context.strip():
+                prompt = prompt + "\n\nContext:\n" + context
+            answer = example.get("response") or ""
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": answer},
+            ]
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+            return {"text": text}
+
+        remove_cols = dataset[script_args.dataset_train_split].column_names
+        dataset = dataset.map(_format_chat, remove_columns=remove_cols)
+        training_args.dataset_text_field = "text"
+        # 只对 assistant 段计算 loss：ChatML 模板里 assistant 以 <|im_start|>assistant 开头
+        training_args.train_on_inputs = False
+        # 某些版本的 SFTConfig 没有 response_template 字段，需兼容处理
+        if not hasattr(training_args, "response_template"):
+            setattr(training_args, "response_template", None)
+        training_args.response_template = response_template
+        logger.info(
+            "Detected Dolly-style columns, reformatted with chat template to 'text', "
+            "set dataset_text_field='text', train_on_inputs=False, "
+            f"response_template='{training_args.response_template}'."
+        )
     ###################
     # Load model
     ###################
@@ -111,6 +156,11 @@ def main(script_args, training_args, model_args):
     ############################
     # Initialize the SFT Trainer
     ############################
+    data_collator = DataCollatorForCompletionOnlyLM(
+        response_template=response_template,
+        tokenizer=tokenizer,
+        mlm=False,
+    )
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -119,7 +169,39 @@ def main(script_args, training_args, model_args):
         processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
         callbacks=get_callbacks(training_args, model_args),
+        data_collator=data_collator,
     )
+
+    # Debug：验证掩蔽是否生效（仅主进程）
+    if trainer.accelerator.is_local_main_process:
+        try:
+            sample = dataset[script_args.dataset_train_split][0]
+            raw_text = sample.get("text", None) or sample.get("prompt", None)
+            if raw_text:
+                tok = tokenizer(
+                    raw_text,
+                    add_special_tokens=False,
+                    return_attention_mask=True,
+                    truncation=True,
+                    max_length=training_args.max_seq_length,
+                )
+                batch = data_collator(
+                    [{"input_ids": tok["input_ids"], "attention_mask": tok.get("attention_mask")}]
+                )
+                labels = batch["labels"][0].tolist()
+                non_masked = sum(1 for v in labels if v != -100)
+                logger.warning(
+                    "Debug sample[0]",
+                    len(labels),
+                    non_masked,
+                    labels,
+                    raw_text,
+                )
+            else:
+                logger.warning("Debug sample[0]: no text field found, skip mask check.")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Debug mask check failed: %s", exc)
+
 
     ###############
     # Training loop

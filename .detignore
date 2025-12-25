@@ -9,4 +9,7 @@ det_yaml/
 task_registry.json
 .github/
 assets/
-.venv
+.venv/
+.venv_py31113/
+Intuitor.tar.gz
+project_backup.tar.gz

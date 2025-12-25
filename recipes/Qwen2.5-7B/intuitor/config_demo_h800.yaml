@@ -1,11 +1,11 @@
 # Model arguments
-model_name_or_path: Qwen/Qwen2.5-7B
+model_name_or_path: /run/determined/localcq1/xuexiang/Qwen2.5-7B
 model_revision: main
 torch_dtype: bfloat16
 attn_implementation: flash_attention_2
 
 # Data training arguments
-dataset_name: DigitalLearningGmbH/MATH-lighteval
+dataset_name: /run/determined/localcq1/xuexiang/dataset/MATH-lighteval
 dataset_config: default
 dataset_prompt_column: problem
 system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. Please provide a step-by-step solution to the following problem."
@@ -14,6 +14,8 @@ system_prompt: "You are a helpful AI Assistant, designed to provided well-reason
 bf16: true
 beta: 0.01 # kl penalty
 use_vllm: true
+vllm_server_host: 127.0.0.1
+vllm_server_port: 8000
 do_eval: false
 gradient_accumulation_steps: 32
 gradient_checkpointing: true
@@ -28,12 +30,12 @@ logging_steps: 5
 logging_strategy: steps
 lr_scheduler_type: cosine
 max_prompt_length: 512
-max_completion_length: 3072
+max_completion_length: 1024
 max_steps: -1
-num_generations: 14
+num_generations: 8
 num_train_epochs: 1
-num_iterations: 1
-output_dir: data/Qwen2.5-GRPO-7B
+num_iterations: 3
+output_dir: /run/determined/localcq1/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-7B
 overwrite_output_dir: true
 per_device_eval_batch_size: 4
 per_device_train_batch_size: 4
@@ -41,11 +43,11 @@ push_to_hub: false
 report_to:
 - wandb
 reward_funcs:
-- accuracy
+- accuracy 
 reward_weights:
-- 1.0
+- 0.0 # Include accuracy reward for monitorying purpose, remove reward_funcs and reward_weights for open-generation RL
 save_strategy: "steps"
-save_total_limit: 6
-save_steps: 10
+save_total_limit: 20
+save_steps: 20
 seed: 7
 warmup_ratio: 0.1

@@ -1,4 +1,4 @@
-name: eval_intuitor
+name: 12h_intuitor
 description: test
 workspace: ALL-IN-ONE
 project: Intuitor
@@ -6,8 +6,8 @@ project: Intuitor
 max_restarts: 0
 # 只需要修改pool和gpu数量
 resources:
-  resource_pool: ada-24g
-  slots_per_trial: 1
+  resource_pool: amp-48g
+  slots_per_trial: 4
   is_single_node: true
   shm_size: 34359738368
 
@@ -40,4 +40,15 @@ searcher:
 profiling:
   enabled: true
 
-entrypoint: /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/eval.sh
+# entrypoint: /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/training_scripts/run_3B_48G_lora.sh
+entrypoint: >
+  bash -lc "
+    clash on
+    export http_proxy=http://127.0.0.1:18093
+    export https_proxy=$http_proxy
+    export HTTP_PROXY=$http_proxy
+    export HTTPS_PROXY=$https_proxy
+    export no_proxy='127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local'
+    export NO_PROXY=$no_proxy
+    exec /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/training_scripts/run_3B_48G_lora.sh
+  "

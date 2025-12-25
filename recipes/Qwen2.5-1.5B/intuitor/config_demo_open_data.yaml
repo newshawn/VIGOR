@@ -1,14 +1,14 @@
 # Model arguments
-model_name_or_path: /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B
+model_name_or_path: /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-1.5B
 model_revision: main
 torch_dtype: bfloat16
 attn_implementation: flash_attention_2
 
 # Data training arguments
-dataset_name: "/home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/codecontest_3200"
+dataset_name: /run/determined/NAS1/public/xuexiang/dataset/processes-dolly-15k
 dataset_config: default
 dataset_prompt_column: prompt
-system_prompt: "You are an AI designed to help solve competitive programming problems by generating Python code."
+system_prompt: "You are a helpful assistant."
 
 # GRPO trainer config
 bf16: true
@@ -47,3 +47,6 @@ save_total_limit: 15
 save_steps: 10
 seed: 7
 warmup_ratio: 0.1
+# For code contest data there is no ground-truth solution column, so disable task rewards (accuracy would crash).
+reward_funcs: []
+reward_weights: []

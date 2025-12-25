@@ -1,0 +1,17 @@
+Skip /run/determined/NAS1/public/xuexiang/Intuitor_ckpt: another watcher holds /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/.watch_merge.lock
+Watching the following ckpt roots (interval=60s):
+  /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-7B_20251212_182123
+Skip /run/determined/NAS1/public/xuexiang/Intuitor_ckpt: another watcher holds /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/.watch_merge.lock
+Watching the following ckpt roots (interval=60s):
+  /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-7B_20251212_182123
+Skip /run/determined/NAS1/public/xuexiang/Intuitor_ckpt: another watcher holds /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/.watch_merge.lock
+Watching the following ckpt roots (interval=60s):
+  /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-7B_20251212_182123
+Skip /run/determined/NAS1/public/xuexiang/Intuitor_ckpt: another watcher holds /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/.watch_merge.lock
+Watching the following ckpt roots (interval=60s):
+  /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-7B_20251212_182123
+Skip /run/determined/NAS1/public/xuexiang/Intuitor_ckpt: another watcher holds /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/.watch_merge.lock
+No valid ckpt roots to watch, exit.
+Skip /run/determined/NAS1/public/xuexiang/Intuitor_ckpt: another watcher holds /run/determined/NAS1/public/xuexiang/Intuitor_ckpt/.watch_merge.lock
+Skip: ckpt dir not found (watch_merge.log)
+No valid ckpt roots to watch, exit.
