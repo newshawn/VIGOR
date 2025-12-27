@@ -32,30 +32,22 @@ RESUME_TIMESTAMP=20251201_132449   # 续跑时填入要复用的时间戳
 export WANDB_RESUME=allow
 export WANDB_RUN_ID=gn4ngikk       # 续跑时填入要续写的 wandb run id
 
-num_generations=8 # 作者使用7，但是3卡时候用7会犯错
+num_generations=14 # 作者使用7，但是3卡时候用7会犯错
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
-SAVE_TOTAL_LIMIT=25 # 控制最多保留的 checkpoint 数量
+SAVE_TOTAL_LIMIT=10 # 控制最多保留的 checkpoint 数量
+SAVE_ONLY_MODEL=true # 仅保存权重，不保存优化器/调度器状态
 
 # GPU 分配策略
-# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
-# - START_VLLM=false: 训练用 0,1,2,3 共 4 卡
-if [ "$START_VLLM" = true ]; then
-    VLLM_DEVICE="0"
-    CUDA_DEVICES="1,2,3"
-    NUM_PROCESSES=3
-    BATCH_SIZE=4
-    GRAD_ACCUM=32
-    lr=1e-5
-else
-    VLLM_DEVICE=""
-    CUDA_DEVICES="0,1,2,3"
-    NUM_PROCESSES=4
-    BATCH_SIZE=3
-    GRAD_ACCUM=32
-    lr=1.0e-06
-fi
+# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3,4,5,6,7 共 7 卡
+VLLM_DEVICE="0"
+CUDA_DEVICES="1,2,3,4,5,6,7"
+NUM_PROCESSES=7
+BATCH_SIZE=4
+GRAD_ACCUM=32
+lr=1e-6
+
 
 # 根据实验类型设置脚本和配置,现在不用grpo
 SCRIPT_PATH="src/open_r1/intuitor.py"
@@ -128,6 +120,7 @@ OUTPUT_DIR: $OUTPUT_DIR
 PROJECT_DIR: $PROJECT_DIR
 START_VLLM: $START_VLLM
 SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT
+SAVE_ONLY_MODEL: $SAVE_ONLY_MODEL
 RESUME_MODE: $RESUME_MODE
 WANDB_RUN_ID: $WANDB_RUN_ID
 RESUME_TIMESTAMP: $RESUME_TIMESTAMP
@@ -170,7 +163,7 @@ nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     $SCRIPT_PATH \
     --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
-    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT --save_only_model true $EXTRA_ARGS \
+    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT --save_only_model $SAVE_ONLY_MODEL $EXTRA_ARGS \
     > "$RUN_LOG_FILE" 2>&1 &
 TRAINING_PID=$!
 wait $TRAINING_PID

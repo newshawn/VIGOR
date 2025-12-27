@@ -596,7 +596,7 @@ class INTUITORTrainer(Trainer):
             )
         ):
             # See https://github.com/huggingface/trl/issues/3213
-            raise NotImplementedError(
+            raise NotImplemeantedError(
                 "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
             )
 
@@ -2171,6 +2171,16 @@ class INTUITORTrainer(Trainer):
         group_size = self.num_generations
         if group_size <= 0:
             return [], 0, 0
+        # Prefer 8-bin or 7-bin summaries when num_generations is a multiple of those sizes.
+        if group_size % 8 == 0:
+            bin_count = 8
+        elif group_size % 7 == 0:
+            bin_count = 7
+        else:
+            bin_count = group_size
+        if group_size % bin_count != 0:
+            bin_count = group_size
+        bin_size = group_size // bin_count
         total_prompt_groups = len(prompts) // group_size
         if total_prompt_groups <= 0:
             return [], 0, total_prompt_groups
@@ -2210,11 +2220,13 @@ class INTUITORTrainer(Trainer):
 
         order = torch.argsort(kl_tensor, dim=1, stable=True)
         summary: list[dict[str, float]] = []
-        for bin_idx in range(group_size):
-            idx = order[:, bin_idx].unsqueeze(1)
-            bin_lengths = torch.gather(len_tensor, 1, idx).squeeze(1)
-            bin_reps = torch.gather(rep_tensor, 1, idx).squeeze(1)
-            bin_accs = torch.gather(acc_tensor, 1, idx).squeeze(1)
+        for bin_idx in range(bin_count):
+            start = bin_idx * bin_size
+            end = start + bin_size
+            idx = order[:, start:end]
+            bin_lengths = torch.gather(len_tensor, 1, idx).reshape(-1)
+            bin_reps = torch.gather(rep_tensor, 1, idx).reshape(-1)
+            bin_accs = torch.gather(acc_tensor, 1, idx).reshape(-1)
 
             length_mean = float(bin_lengths.mean().item()) if bin_lengths.numel() else float("nan")
             rep_mean = float(bin_reps.mean().item()) if bin_reps.numel() else float("nan")
@@ -2230,7 +2242,7 @@ class INTUITORTrainer(Trainer):
             bin_label = f"Bin {bin_idx}"
             if bin_idx == 0:
                 bin_label += " (Lowest SCE)"
-            elif bin_idx == group_size - 1:
+            elif bin_idx == bin_count - 1:
                 bin_label += " (Highest SCE)"
 
             summary.append(
@@ -2289,13 +2301,14 @@ class INTUITORTrainer(Trainer):
         plot_series(axes[4], acc_means, "Accuracy Reward (mean)", "Value", "#9467bd")
         fig.delaxes(axes[5])
 
-        fig.suptitle(f"SCE {self.num_generations}-Bin Summary (step {step})", fontsize=12)
+        bin_count = len(summary)
+        fig.suptitle(f"SCE {bin_count}-Bin Summary (step {step})", fontsize=12)
         plot_dir = self._kl_plot_dir
         plot_dir.mkdir(parents=True, exist_ok=True)
         plot_path = plot_dir / f"sce_bin_summary_step_{step:06d}.png"
         fig.savefig(plot_path, dpi=200, bbox_inches="tight")
         plt.close(fig)
-        self.accelerator.print(f"[SCE bins] Saved 8-bin summary plot to {plot_path}")
+        self.accelerator.print(f"[SCE bins] Saved {bin_count}-bin summary plot to {plot_path}")
 
     def _save_reward_heatmap(
         self,

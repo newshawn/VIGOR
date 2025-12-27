@@ -11,7 +11,7 @@ unset HTTP_PROXY
 unset HTTPS_PROXY
 # clash off
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
-export PATH=/usr/local/cuda-12.4/bin:${PATH}
+export PATH=/usr/local/cuda-12.4/bin:${PATH} 
 export CUDA_HOME=/usr/local/cuda-12.4
 export http_proxy=http://127.0.0.1:18093
 export https_proxy=http://127.0.0.1:18093
@@ -28,52 +28,63 @@ export UPLOAD_WANDB_ARTIFACTS=true        # true: 上传日志等文件到 wandb
 
 # === 手动/环境可配置的续跑参数（默认关闭） ===
 RESUME_MODE=false              # true: 续跑；false: 新跑
-RESUME_TIMESTAMP=20251113_073223   # 续跑时填入要复用的时间戳
+RESUME_TIMESTAMP=20251210_085759   # 续跑时填入要复用的时间戳
 export WANDB_RESUME=allow
-export WANDB_RUN_ID=ihmq57k3       # 续跑时填入要续写的 wandb run id
+export WANDB_RUN_ID=ae43rtju      # 续跑时填入要续写的 wandb run id
 
-EXP_TYPE=intuitor
-MAX_STEPS=-1
-START_VLLM=true   # true: vLLM 单独占用 1 卡；false: 全部 GPU 训练
-NUM_PROCESSES=3   # 仅支持 4（会结合 START_VLLM 自动调整）
-SAVE_TOTAL_LIMIT=10 # 控制最多保留的 checkpoint 数量，当 SAVE_STRATEGY="no" 时无效
-SAVE_STRATEGY="no" # 使用 top-k 保存时关闭定期保存，用它来关闭“每 N 步保存”的逻辑
-SAVE_TOP_K=5
+num_generations=8 # 作者使用7，但是3卡时候用7会犯错
+EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
+MAX_STEPS=-1    # 可选 -1 或者具体步数
+START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
+SAVE_TOTAL_LIMIT=5 # 控制最多保留的 checkpoint 数量，当SAVE_STRATEGY="no"时无效
+SAVE_STRATEGY="steps" # 使用 top-k 保存时关闭定期保存，用它来关闭“每 N 步保存”的逻辑
+SAVE_TOP_K=2
 SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
 SAVE_TOP_K_GREATER_IS_BETTER=true
 SAVE_RESUME_STEPS=20 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
-LOGGING_STEPS=5 # 训练日志记录步数间隔（配合 logging_strategy=steps）
-MAX_COMPLETION_LENGTH=1024
-KL_REWARD_SQRT_LEN_SCALING_ENABLED=false
-KL_REWARD_RANK_NORMALIZATION_ENABLED=false
-KL_ENTROPY_WEIGHTING_ENABLED=false
+LOGGING_STEPS=3 # 训练日志记录步数间隔（配合 logging_strategy=steps）
+MAX_COMPLETION_LENGTH=3072 # completion 最大长度（覆盖 YAML 里的 max_completion_length）
+KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
+KL_REWARD_RANK_NORMALIZATION_ENABLED=true
+KL_ENTROPY_WEIGHTING_ENABLED=true
 KL_ENTROPY_FOCAL_LAMBDA=-0.1
 
-
-VLLM_DEVICE="0"
-CUDA_DEVICES="1,2,3"
-num_generations=8
-NUM_PROCESSES=3   # 预留 GPU0 给 vLLM
-BATCH_SIZE=8
-GRAD_ACCUM=16
-lr=3e-6
-beta=0.005   # kl penalty
+# GPU 分配策略
+# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
+# - START_VLLM=false: 训练用 0,1,2,3 共 4 卡
+if [ "$START_VLLM" = true ]; then
+    VLLM_DEVICE="0"
+    CUDA_DEVICES="1,2,3"
+    NUM_PROCESSES=3
+    BATCH_SIZE=4
+    GRAD_ACCUM=32
+    lr=2e-6
+    beta=0.005   # kl penalty
+else
+    VLLM_DEVICE=""
+    CUDA_DEVICES="0,1,2,3"
+    NUM_PROCESSES=4
+    BATCH_SIZE=3
+    GRAD_ACCUM=32
+    lr=2e-6
+    beta=0.001   # kl penalty
+fi
 
 # 根据实验类型设置脚本和配置
 if [ "$EXP_TYPE" = "grpo" ]; then
     SCRIPT_PATH="src/open_r1/grpo.py"
-    CONFIG_FILE="recipes/Qwen2.5-1.5B/grpo/config_demo.yaml"
-    WANDB_PROJECT="open-r1-grpo_qwen2.5-1.5B"
-    RUN_NAME="Qwen2.5-GRPO-1.5B"
+    CONFIG_FILE="recipes/Qwen2.5-3B/grpo/config_demo.yaml"
+    WANDB_PROJECT="open-r1-grpo_qwen2.5-3B"
+    RUN_NAME="Qwen2.5-GRPO-3B"
     LOG_PREFIX="grpo"
-    BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-GRPO-1.5B"
+    BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-GRPO-3B"
 else
     SCRIPT_PATH="src/open_r1/intuitor.py"
-    CONFIG_FILE="recipes/Qwen2.5-1.5B/intuitor/config_demo.yaml"
-    WANDB_PROJECT="open-r1-intuitor-qwen2.5-1.5B"
-    RUN_NAME="Qwen2.5-Intuitor-1.5B"
+    CONFIG_FILE="recipes/Qwen2.5-3B-Instruct/intuitor/config_demo.yaml"
+    WANDB_PROJECT="open-r1-intuitor_qwen2.5-3B-Instruct"
+    RUN_NAME="Qwen2.5-Intuitor-3B-Instruct"
     LOG_PREFIX="intuitor"
-    BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-1.5B"
+    BASE_OUTPUT_DIR="/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-Instruct"
 fi
 
 
@@ -137,7 +148,6 @@ LOG_PREFIX: $LOG_PREFIX
 LOG_DIR: $LOG_DIR
 RUN_LOG_FILE: $RUN_LOG_FILE
 num_generations: $num_generations
-MAX_COMPLETION_LENGTH: $MAX_COMPLETION_LENGTH
 OUTPUT_DIR: $OUTPUT_DIR
 PROJECT_DIR: $PROJECT_DIR
 START_VLLM: $START_VLLM
@@ -148,6 +158,11 @@ SAVE_TOP_K_METRIC: $SAVE_TOP_K_METRIC
 SAVE_TOP_K_GREATER_IS_BETTER: $SAVE_TOP_K_GREATER_IS_BETTER
 SAVE_RESUME_STEPS: $SAVE_RESUME_STEPS
 LOGGING_STEPS: $LOGGING_STEPS
+MAX_COMPLETION_LENGTH: $MAX_COMPLETION_LENGTH
+KL_REWARD_SQRT_LEN_SCALING_ENABLED: $KL_REWARD_SQRT_LEN_SCALING_ENABLED
+KL_REWARD_RANK_NORMALIZATION_ENABLED: $KL_REWARD_RANK_NORMALIZATION_ENABLED
+KL_ENTROPY_WEIGHTING_ENABLED: $KL_ENTROPY_WEIGHTING_ENABLED
+KL_ENTROPY_FOCAL_LAMBDA: $KL_ENTROPY_FOCAL_LAMBDA
 RESUME_MODE: $RESUME_MODE
 RESUME_FROM_CHECKPOINT: $RESUME_FROM_CHECKPOINT
 WANDB_RUN_ID: $WANDB_RUN_ID
@@ -167,7 +182,7 @@ echo "GPU监控已启动 PID: $MONITOR_PID"
 if [ "$START_VLLM" = true ]; then
   nohup env CUDA_VISIBLE_DEVICES=$VLLM_DEVICE \
       trl vllm-serve \
-      --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-1.5B \
+      --model /run/determined/NAS1/public/HuggingFace/Qwen/Qwen2.5-3B-Instruct \
       > "$VLLM_LOG_FILE" 2>&1 &
   VLLM_PID=$!
   echo "vLLM server started with PID: $VLLM_PID on GPU $VLLM_DEVICE"
@@ -189,7 +204,7 @@ if [ "$RESUME_MODE" = true ]; then
   RESUME_ARGS="--resume_from_checkpoint $RESUME_FROM_CHECKPOINT"
 fi
 
-# 启动训练脚本
+# 启动训练脚本，默认的是24g版本，num_processes=7；为3的时候就使用48g显存
 # Mirror training log to terminal
 touch "$RUN_LOG_FILE"
 tail -n 0 -F "$RUN_LOG_FILE" &

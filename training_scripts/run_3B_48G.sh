@@ -32,38 +32,30 @@ RESUME_TIMESTAMP=20251210_085759   # 续跑时填入要复用的时间戳
 export WANDB_RESUME=allow
 export WANDB_RUN_ID=ae43rtju      # 续跑时填入要续写的 wandb run id
 
-num_generations=8 # 作者使用7，但是3卡时候用7会犯错
+
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
-SAVE_TOTAL_LIMIT=5 # 控制最多保留的 checkpoint 数量，当SAVE_STRATEGY="no"时无效
-SAVE_STRATEGY="no" # 使用 top-k 保存时关闭定期保存，用它来关闭“每 N 步保存”的逻辑
-SAVE_TOP_K=5
+SAVE_TOTAL_LIMIT=6 # 控制最多保留的 checkpoint 数量，当SAVE_STRATEGY="no"时无效
+SAVE_STRATEGY="steps" # "no" top-k; "steps" “每 N 步保存”的逻辑
+SAVE_TOP_K=2
 SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
 SAVE_TOP_K_GREATER_IS_BETTER=true
 SAVE_RESUME_STEPS=20 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
 LOGGING_STEPS=3 # 训练日志记录步数间隔（配合 logging_strategy=steps）
+MAX_COMPLETION_LENGTH=3072 # completion 最大长度（覆盖 YAML 里的 max_completion_length）
 
 # GPU 分配策略
-# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
-# - START_VLLM=false: 训练用 0,1,2,3 共 4 卡
-if [ "$START_VLLM" = true ]; then
-    VLLM_DEVICE="0"
-    CUDA_DEVICES="1,2,3"
-    NUM_PROCESSES=3
-    BATCH_SIZE=4
-    GRAD_ACCUM=32
-    lr=1e-6
-    beta=0.01   # kl penalty
-else
-    VLLM_DEVICE=""
-    CUDA_DEVICES="0,1,2,3"
-    NUM_PROCESSES=4
-    BATCH_SIZE=3
-    GRAD_ACCUM=32
-    lr=1e-6
-    beta=0.001   # kl penalty
-fi
+# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3,4,5,6,7 共 7 卡
+num_generations=7
+VLLM_DEVICE="0"
+CUDA_DEVICES="1,2,3,4,5,6,7"
+NUM_PROCESSES=7
+BATCH_SIZE=4
+GRAD_ACCUM=32
+lr=2e-6
+beta=0.005   # kl penalty
+
 
 # 根据实验类型设置脚本和配置
 if [ "$EXP_TYPE" = "grpo" ]; then
@@ -153,6 +145,7 @@ SAVE_TOP_K_METRIC: $SAVE_TOP_K_METRIC
 SAVE_TOP_K_GREATER_IS_BETTER: $SAVE_TOP_K_GREATER_IS_BETTER
 SAVE_RESUME_STEPS: $SAVE_RESUME_STEPS
 LOGGING_STEPS: $LOGGING_STEPS
+MAX_COMPLETION_LENGTH: $MAX_COMPLETION_LENGTH
 RESUME_MODE: $RESUME_MODE
 RESUME_FROM_CHECKPOINT: $RESUME_FROM_CHECKPOINT
 WANDB_RUN_ID: $WANDB_RUN_ID
@@ -202,7 +195,7 @@ TAIL_PID=$!
 nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=$NUM_PROCESSES \
     $SCRIPT_PATH \
-    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --beta $beta --max_steps $MAX_STEPS --logging_steps $LOGGING_STEPS \
+    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --beta $beta --max_steps $MAX_STEPS --logging_steps $LOGGING_STEPS --max_completion_length $MAX_COMPLETION_LENGTH \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
     --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_only_model true --save_total_limit $SAVE_TOTAL_LIMIT \
     --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER --save_resume_steps $SAVE_RESUME_STEPS \
