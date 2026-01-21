@@ -32,21 +32,23 @@ RESUME_TIMESTAMP=20251201_132449   # 续跑时填入要复用的时间戳
 export WANDB_RESUME=allow
 export WANDB_RUN_ID=gn4ngikk       # 续跑时填入要续写的 wandb run id
 
-num_generations=14 # 作者使用7，但是3卡时候用7会犯错
+num_generations=8 # 作者使用7，但是3卡时候用7会犯错
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
-SAVE_TOTAL_LIMIT=10 # 控制最多保留的 checkpoint 数量
+SAVE_TOTAL_LIMIT=20 # 控制最多保留的 checkpoint 数量
 SAVE_ONLY_MODEL=true # 仅保存权重，不保存优化器/调度器状态
+SAVE_RESUME_STEPS=0 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
 
 # GPU 分配策略
-# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3,4,5,6,7 共 7 卡
+# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
 VLLM_DEVICE="0"
-CUDA_DEVICES="1,2,3,4,5,6,7"
-NUM_PROCESSES=7
+CUDA_DEVICES="1,2,3"
+NUM_PROCESSES=3
 BATCH_SIZE=4
 GRAD_ACCUM=32
-lr=1e-6
+lr=2e-6
+beta=0.01   # kl penalty
 
 
 # 根据实验类型设置脚本和配置,现在不用grpo
@@ -108,6 +110,7 @@ CUDA_DEVICES: $CUDA_DEVICES
 BATCH_SIZE: $BATCH_SIZE
 GRAD_ACCUM: $GRAD_ACCUM
 lr: $lr
+beta: $beta
 SCRIPT_PATH: $SCRIPT_PATH
 CONFIG_FILE: $CONFIG_FILE
 WANDB_PROJECT: $WANDB_PROJECT
@@ -121,6 +124,7 @@ PROJECT_DIR: $PROJECT_DIR
 START_VLLM: $START_VLLM
 SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT
 SAVE_ONLY_MODEL: $SAVE_ONLY_MODEL
+SAVE_RESUME_STEPS: $SAVE_RESUME_STEPS
 RESUME_MODE: $RESUME_MODE
 WANDB_RUN_ID: $WANDB_RUN_ID
 RESUME_TIMESTAMP: $RESUME_TIMESTAMP
@@ -161,9 +165,9 @@ TAIL_PID=$!
 nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=$NUM_PROCESSES \
     $SCRIPT_PATH \
-    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
+    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --beta $beta --max_steps $MAX_STEPS \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
-    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT --save_only_model $SAVE_ONLY_MODEL $EXTRA_ARGS \
+    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT --save_only_model $SAVE_ONLY_MODEL --save_resume_steps $SAVE_RESUME_STEPS $EXTRA_ARGS \
     > "$RUN_LOG_FILE" 2>&1 &
 TRAINING_PID=$!
 wait $TRAINING_PID

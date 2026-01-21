@@ -168,13 +168,14 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-
+slurm/
 # Temp folders
 data/
 wandb/
 logs/
 eval_results/
 results/
+slurm/
 
 .vscode/
 .python-version

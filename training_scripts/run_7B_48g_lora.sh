@@ -40,15 +40,23 @@ KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
 KL_REWARD_RANK_NORMALIZATION_ENABLED=true
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
 SAVE_TOTAL_LIMIT=16 # 控制最多保留的 checkpoint 数量
+SAVE_STEPS=20      # checkpoint 间隔步数
+SAVE_STRATEGY="steps" # 使用 top-k 保存时关闭定期保存
+SAVE_ONLY_MODEL=true # 仅保存权重（不保存优化器等状态）
+SAVE_TOP_K=0
+SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
+SAVE_TOP_K_GREATER_IS_BETTER=true
+LOGGING_STEPS=5
 
 # GPU 分配策略
 # vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
 VLLM_DEVICE="0"
 CUDA_DEVICES="1,2,3"
 NUM_PROCESSES=3
-BATCH_SIZE=4
-GRAD_ACCUM=8
-lr=1.0e-05
+BATCH_SIZE=2
+GRAD_ACCUM=64
+lr=2.0e-05
+beta=0.01   # kl penalty
 
 
 # 根据实验类型设置脚本和配置
@@ -118,6 +126,7 @@ CUDA_DEVICES: $CUDA_DEVICES
 BATCH_SIZE: $BATCH_SIZE
 GRAD_ACCUM: $GRAD_ACCUM
 lr: $lr
+beta: $beta
 SCRIPT_PATH: $SCRIPT_PATH
 CONFIG_FILE: $CONFIG_FILE
 WANDB_PROJECT: $WANDB_PROJECT
@@ -130,6 +139,13 @@ OUTPUT_DIR: $OUTPUT_DIR
 PROJECT_DIR: $PROJECT_DIR
 START_VLLM: $START_VLLM
 SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT
+SAVE_STEPS: $SAVE_STEPS
+SAVE_STRATEGY: $SAVE_STRATEGY
+SAVE_ONLY_MODEL: $SAVE_ONLY_MODEL
+SAVE_TOP_K: $SAVE_TOP_K
+SAVE_TOP_K_METRIC: $SAVE_TOP_K_METRIC
+SAVE_TOP_K_GREATER_IS_BETTER: $SAVE_TOP_K_GREATER_IS_BETTER
+LOGGING_STEPS: $LOGGING_STEPS
 RESUME_MODE: $RESUME_MODE
 WANDB_RUN_ID: $WANDB_RUN_ID
 RESUME_TIMESTAMP: $RESUME_TIMESTAMP
@@ -170,9 +186,10 @@ TAIL_PID=$!
 nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=$NUM_PROCESSES \
     $SCRIPT_PATH \
-    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS --max_completion_length $MAX_COMPLETION_LENGTH \
+    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --beta $beta --max_steps $MAX_STEPS --logging_steps $LOGGING_STEPS --max_completion_length $MAX_COMPLETION_LENGTH \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
-    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT $EXTRA_ARGS \
+    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT --save_only_model $SAVE_ONLY_MODEL --save_steps $SAVE_STEPS \
+    --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER $EXTRA_ARGS \
     --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
     --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
     > "$RUN_LOG_FILE" 2>&1 &

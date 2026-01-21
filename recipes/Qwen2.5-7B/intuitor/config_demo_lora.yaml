@@ -4,8 +4,8 @@ model_revision: main
 torch_dtype: bfloat16
 attn_implementation: flash_attention_2
 use_peft: true
-lora_r: 64
-lora_alpha: 128
+lora_r: 16
+lora_alpha: 32
 lora_dropout: 0.05
 lora_target_modules:
   - q_proj

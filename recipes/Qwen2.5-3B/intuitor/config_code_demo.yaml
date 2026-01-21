@@ -6,9 +6,12 @@ attn_implementation: flash_attention_2
 
 # Data training arguments
 dataset_name: "/home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/codecontest_3200"
+# dataset_name: /home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/codecontest
 dataset_config: default
 dataset_prompt_column: prompt
-system_prompt: "You are an AI designed to help solve competitive programming problems by generating Python code."
+# system_prompt: "You are an AI designed to help solve competitive programming problems by generating Python code."
+system_prompt: "You are a competitive programming assistant. Write a correct and efficient Python 3 program that reads from stdin and writes to stdout. Output only the code."
+# system_prompt: "A conversation between User and Assistant. The user asks a question,and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think> <answer> answer here </answer>."
 
 # GRPO trainer config
 bf16: true
@@ -31,8 +34,8 @@ logging_strategy: steps
 lr_scheduler_type: cosine
 max_prompt_length: 1024
 max_completion_length: 2048
-max_steps: 100
-num_generations: 14
+max_steps: -1
+num_generations: 8
 num_train_epochs: 1
 num_iterations: 1
 output_dir: data/Qwen2.5-3B-Intuitor-Code

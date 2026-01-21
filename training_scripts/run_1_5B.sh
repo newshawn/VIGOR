@@ -43,21 +43,22 @@ SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
 SAVE_TOP_K_GREATER_IS_BETTER=true
 SAVE_RESUME_STEPS=20 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
 LOGGING_STEPS=5 # 训练日志记录步数间隔（配合 logging_strategy=steps）
-MAX_COMPLETION_LENGTH=1024
-KL_REWARD_SQRT_LEN_SCALING_ENABLED=false
-KL_REWARD_RANK_NORMALIZATION_ENABLED=false
+KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
+KL_REWARD_RANK_NORMALIZATION_ENABLED=true
 KL_ENTROPY_WEIGHTING_ENABLED=false
 KL_ENTROPY_FOCAL_LAMBDA=-0.1
 
 
 VLLM_DEVICE="0"
-CUDA_DEVICES="1,2,3"
+CUDA_DEVICES="1,2,3,4,5,6"
 num_generations=8
-NUM_PROCESSES=3   # 预留 GPU0 给 vLLM
-BATCH_SIZE=8
-GRAD_ACCUM=16
+NUM_PROCESSES=6   # 预留 GPU0 给 vLLM
+BATCH_SIZE=1
+GRAD_ACCUM=128
 lr=3e-6
-beta=0.005   # kl penalty
+beta=0.05   # kl penalty
+MAX_COMPLETION_LENGTH=2048
+TEMPERATURE=0.9 # 采样温度，降低随机性以减少小模型胡言乱语
 
 # 根据实验类型设置脚本和配置
 if [ "$EXP_TYPE" = "grpo" ]; then
@@ -201,6 +202,7 @@ nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
     --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_only_model true --save_total_limit $SAVE_TOTAL_LIMIT \
     --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER --save_resume_steps $SAVE_RESUME_STEPS \
+    --temperature $TEMPERATURE \
     --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
     --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
     --kl_entropy_weighting_enabled $KL_ENTROPY_WEIGHTING_ENABLED \

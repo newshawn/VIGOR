@@ -54,17 +54,16 @@ SAVE_TOTAL_LIMIT=20 # 控制最多保留的 checkpoint 数量
 SAVE_STEPS=20      # checkpoint 间隔步数
 SAVE_STRATEGY="no" # 使用 top-k 保存时关闭定期保存
 ### 保存top-K的ckpt，默认保存accuracy_reward/mean最大的ckpt，并且不保存优化器，每LOGGING_STEPS更新一次top-K
-SAVETOP_K_GREATER_IS_BETTER=true
+SAVE_TOP_K_GREATER_IS_BETTER=true
 LOGGING_STEPS=5
 MAX_COMPLETION_LENGTH=3072
 KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
 KL_REWARD_RANK_NORMALIZATION_ENABLED=true
 KL_ENTROPY_WEIGHTING_ENABLED=false
 KL_ENTROPY_FOCAL_LAMBDA=0.1
-_ONLY_MODEL=true
+SAVE_ONLY_MODEL=true
 SAVE_TOP_K=5
 SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
-SAVE_
 # GPU 分配策略
 # - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
 # - START_VLLM=false: 训练用 0,1,2,3 共 4 卡
@@ -88,6 +87,10 @@ else
 fi
 
 # 如果不启动 vLLM，则通过 CLI 覆盖 YAML，关闭 use_vllm
+if [ -n "${LR:-}" ]; then
+  lr="$LR"
+fi
+
 EXTRA_ARGS=""
 if [ "$START_VLLM" != true ]; then
   EXTRA_ARGS="--use_vllm false"
@@ -156,6 +159,8 @@ else
     RUN_LOG_FILE="${LOG_DIR}/run_${LOG_PREFIX}_${RUN_LAUNCH_TS}.log"
 fi
 VLLM_LOG_FILE="${LOG_DIR}/vllm-server.log"
+
+# 进程清理：确保退出时回收 vLLM 和监控进程，避免僵尸
 
 # 显示/记录配置参数
 read -r -d '' RUN_CONFIG <<EOF

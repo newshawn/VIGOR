@@ -8,7 +8,7 @@ attn_implementation: flash_attention_2
 dataset_name: /run/determined/NAS1/public/xuexiang/dataset/MATH-lighteval
 dataset_config: default
 dataset_prompt_column: problem
-system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process step by step and then provide the user with the answer. Please enclose your final answer in the box: \\boxed{Your Answer}. Please stop generation immediately after outputing the box."
+system_prompt: Let’s think step by step and output the final answer within \boxed{}.
 
 # GRPO trainer config
 bf16: true
@@ -46,6 +46,6 @@ reward_weights:
 - 1.0
 save_strategy: "steps"
 save_total_limit: 6
-save_steps: 10
+save_steps: 30
 seed: 7
 warmup_ratio: 0.1

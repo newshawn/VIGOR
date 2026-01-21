@@ -36,25 +36,27 @@ export WANDB_RUN_ID=ae43rtju      # 续跑时填入要续写的 wandb run id
 EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
-SAVE_TOTAL_LIMIT=6 # 控制最多保留的 checkpoint 数量，当SAVE_STRATEGY="no"时无效
+SAVE_TOTAL_LIMIT=15 # 控制最多保留的 checkpoint 数量，当SAVE_STRATEGY="no"时无效
 SAVE_STRATEGY="steps" # "no" top-k; "steps" “每 N 步保存”的逻辑
-SAVE_TOP_K=2
+SAVE_TOP_K=0
 SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
 SAVE_TOP_K_GREATER_IS_BETTER=true
-SAVE_RESUME_STEPS=20 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
+SAVE_RESUME_STEPS=0 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
 LOGGING_STEPS=3 # 训练日志记录步数间隔（配合 logging_strategy=steps）
-MAX_COMPLETION_LENGTH=3072 # completion 最大长度（覆盖 YAML 里的 max_completion_length）
+MAX_COMPLETION_LENGTH=1024 # completion 最大长度（覆盖 YAML 里的 max_completion_length）
+KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
+KL_REWARD_RANK_NORMALIZATION_ENABLED=true
 
 # GPU 分配策略
-# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3,4,5,6,7 共 7 卡
-num_generations=7
+# - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3共 3 卡
+num_generations=8
 VLLM_DEVICE="0"
-CUDA_DEVICES="1,2,3,4,5,6,7"
-NUM_PROCESSES=7
+CUDA_DEVICES="1,2,3"
+NUM_PROCESSES=3
 BATCH_SIZE=4
 GRAD_ACCUM=32
 lr=2e-6
-beta=0.005   # kl penalty
+beta=0.01   # kl penalty
 
 
 # 根据实验类型设置脚本和配置
@@ -146,6 +148,8 @@ SAVE_TOP_K_GREATER_IS_BETTER: $SAVE_TOP_K_GREATER_IS_BETTER
 SAVE_RESUME_STEPS: $SAVE_RESUME_STEPS
 LOGGING_STEPS: $LOGGING_STEPS
 MAX_COMPLETION_LENGTH: $MAX_COMPLETION_LENGTH
+KL_REWARD_SQRT_LEN_SCALING_ENABLED: $KL_REWARD_SQRT_LEN_SCALING_ENABLED
+KL_REWARD_RANK_NORMALIZATION_ENABLED: $KL_REWARD_RANK_NORMALIZATION_ENABLED
 RESUME_MODE: $RESUME_MODE
 RESUME_FROM_CHECKPOINT: $RESUME_FROM_CHECKPOINT
 WANDB_RUN_ID: $WANDB_RUN_ID
@@ -199,6 +203,8 @@ nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
     --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_only_model true --save_total_limit $SAVE_TOTAL_LIMIT \
     --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER --save_resume_steps $SAVE_RESUME_STEPS \
+    --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
+    --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
     $RESUME_ARGS $EXTRA_ARGS \
     > "$RUN_LOG_FILE" 2>&1 &
 TRAINING_PID=$!

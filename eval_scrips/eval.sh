@@ -8,7 +8,7 @@
 
 cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/.venv_lighteval/bin/activate
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+# export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 # 确保 HF 本地缓存与离线模式（集群/无网环境使用本地缓存）
@@ -64,8 +64,28 @@ MODELS=(
   # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251221_083515/ckpt"
   # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-code_20251222_185707/ckpt"
   # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-code_20251222_112548/ckpt"
-  "/run/determined/NAS1/public/xuexiang/model/models--sunblaze-ucb--Qwen2.5-3B-Intuitor-MATH-1EPOCH/snapshots/bdb0b2fc48a80ab8906521ac55a4ce278a0538e5"
-  "/run/determined/NAS1/public/xuexiang/model/Qwen2.5-7B-Intuitor-MATH-1EPOCH"
+  # "/run/determined/NAS1/public/xuexiang/model/models--sunblaze-ucb--Qwen2.5-3B-Intuitor-MATH-1EPOCH/snapshots/bdb0b2fc48a80ab8906521ac55a4ce278a0538e5"
+  # "/run/determined/NAS1/public/xuexiang/model/Qwen2.5-7B-Intuitor-MATH-1EPOCH"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-code_20251223_052751/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-7B_20251207_174204/merged"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-7B_20251227_181906/merged"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251230_165605/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251230_165730/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251230_153440/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20251230_153217/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-GRPO-3B_20260101_114107/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-GRPO-3B_20260101_114248/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20260101_134852/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20260101_190903/ckpt"
+  # "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B_20260101_114504/ckpt"
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-code_20251231_060548/ckpt"
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-code_20260103_212907/ckpt"
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-code_20260103_164330/ckpt"
+  "/run/determined/NAS1/public/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-3B-code_20260103_163535/ckpt"
+  "/home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/Qwen2.5-Intuitor-Code_20260103_162644"
+  "/home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/Qwen2.5-Intuitor-Code_20260103_162354"
+  "/home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/Qwen2.5-Intuitor-Code_20260103_211608"
+  "/home/wenxuexiang/projects/baseline/Intuitor/open-r1-intuitor/data/Qwen2.5-Intuitor-Code_20260103_214634"
 )
 
 

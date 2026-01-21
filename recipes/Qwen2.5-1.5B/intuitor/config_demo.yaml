@@ -12,7 +12,7 @@ system_prompt: "You are a helpful AI Assistant, designed to provided well-reason
 
 # GRPO trainer config
 bf16: true
-beta: 0.005 # kl penalty
+beta: 0.1 # kl penalty
 use_vllm: true
 do_eval: false
 

@@ -37,25 +37,25 @@ EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
 MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
 SAVE_TOTAL_LIMIT=16 # 控制最多保留的 checkpoint 数量
+SAVE_STRATEGY="steps" # "no" top-k; "steps" “每 N 步保存”的逻辑
+SAVE_TOP_K=2
+SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
+SAVE_TOP_K_GREATER_IS_BETTER=true
+SAVE_RESUME_STEPS=20 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
+MAX_COMPLETION_LENGTH=3072 # completion 最大长度（覆盖 YAML 里的 max_completion_length）
+KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
+KL_REWARD_RANK_NORMALIZATION_ENABLED=true
+KL_ENTROPY_WEIGHTING_ENABLED=false
+KL_ENTROPY_FOCAL_LAMBDA=0.1
 
 # GPU 分配策略
 # - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
-# - START_VLLM=false: 训练用 0,1,2,3 共 4 卡
-if [ "$START_VLLM" = true ]; then
-    VLLM_DEVICE="0"
-    CUDA_DEVICES="1,2,3"
-    NUM_PROCESSES=3
-    BATCH_SIZE=4
-    GRAD_ACCUM=8
-    lr=6.0e-7
-else
-    VLLM_DEVICE=""
-    CUDA_DEVICES="0,1,2,3"
-    NUM_PROCESSES=4
-    BATCH_SIZE=8
-    GRAD_ACCUM=16
-    lr=1.0e-06
-fi
+VLLM_DEVICE="0"
+CUDA_DEVICES="1,2,3"
+NUM_PROCESSES=3
+BATCH_SIZE=4
+GRAD_ACCUM=32
+lr=2e-5
 
 # 根据实验类型设置脚本和配置
 if [ "$EXP_TYPE" = "grpo" ]; then
@@ -136,6 +136,16 @@ OUTPUT_DIR: $OUTPUT_DIR
 PROJECT_DIR: $PROJECT_DIR
 START_VLLM: $START_VLLM
 SAVE_TOTAL_LIMIT: $SAVE_TOTAL_LIMIT
+SAVE_STRATEGY: $SAVE_STRATEGY
+SAVE_TOP_K: $SAVE_TOP_K
+SAVE_TOP_K_METRIC: $SAVE_TOP_K_METRIC
+SAVE_TOP_K_GREATER_IS_BETTER: $SAVE_TOP_K_GREATER_IS_BETTER
+SAVE_RESUME_STEPS: $SAVE_RESUME_STEPS
+MAX_COMPLETION_LENGTH: $MAX_COMPLETION_LENGTH
+KL_REWARD_SQRT_LEN_SCALING_ENABLED: $KL_REWARD_SQRT_LEN_SCALING_ENABLED
+KL_REWARD_RANK_NORMALIZATION_ENABLED: $KL_REWARD_RANK_NORMALIZATION_ENABLED
+KL_ENTROPY_WEIGHTING_ENABLED: $KL_ENTROPY_WEIGHTING_ENABLED
+KL_ENTROPY_FOCAL_LAMBDA: $KL_ENTROPY_FOCAL_LAMBDA
 RESUME_MODE: $RESUME_MODE
 WANDB_RUN_ID: $WANDB_RUN_ID
 RESUME_TIMESTAMP: $RESUME_TIMESTAMP
@@ -172,9 +182,15 @@ fi
 nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=$NUM_PROCESSES \
     $SCRIPT_PATH \
-    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS \
+    --per_device_eval_batch_size $BATCH_SIZE --per_device_train_batch_size $BATCH_SIZE --gradient_accumulation_steps $GRAD_ACCUM --learning_rate $lr --max_steps $MAX_STEPS --max_completion_length $MAX_COMPLETION_LENGTH \
     --num_generations $num_generations --output_dir $OUTPUT_DIR \
-    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_total_limit $SAVE_TOTAL_LIMIT $EXTRA_ARGS \
+    --config $CONFIG_FILE --wandb_project $WANDB_PROJECT --run_name $RUN_NAME --save_only_model true --save_total_limit $SAVE_TOTAL_LIMIT \
+    --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER --save_resume_steps $SAVE_RESUME_STEPS \
+    --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
+    --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
+    --kl_entropy_weighting_enabled $KL_ENTROPY_WEIGHTING_ENABLED \
+    --kl_entropy_focal_lambda $KL_ENTROPY_FOCAL_LAMBDA \
+    $EXTRA_ARGS \
     > "$RUN_LOG_FILE" 2>&1 &
 TRAINING_PID=$!
 wait $TRAINING_PID
