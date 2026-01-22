@@ -41,8 +41,9 @@ VIGOR is a verifier-free intrinsic reward for RL post-training that rewards comp
 
 ### 💻 Installation
 ```bash
-./scripts/setup_venv.sh 3.11.13
-source .venv/bin/activate
+INSTALL_PROFILE=gpu SKIP_GIT_LFS_SMUDGE=1 ./scripts/setup_venv.sh 3.11.13 && source .venv/bin/activate
+# remove
+rm -rf .venv .uv-cache
 ```
 
 <!-- ### 🚀 Usage

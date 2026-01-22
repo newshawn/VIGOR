@@ -54,7 +54,6 @@ fastapi-cli==0.0.11
 fastapi-cloud-cli==0.1.5
 fastrlock==0.8.3
 filelock==3.20.0
-flash_attn==2.7.4.post1
 fonttools==4.60.1
 frozendict==2.4.7
 frozenlist==1.8.0
@@ -262,7 +261,6 @@ uritemplate==4.2.0
 urllib3==2.5.0
 uvicorn==0.35.0
 uvloop==0.21.0
-vllm==0.8.4
 wandb==0.21.4
 watchfiles==1.1.0
 wcwidth==0.2.13
