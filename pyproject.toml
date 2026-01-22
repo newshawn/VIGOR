@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-r1-intuitor"
+version = "0.0.0"
+description = "VIGOR / INTUITOR training and evaluation code."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+
+# Keep base deps empty; use `requirements.txt` / extras for environments.
+dependencies = []
+
+[project.optional-dependencies]
+# Lint/format tools used by `make quality` / `make style`
+quality = [
+  "ruff",
+  "isort",
+  "flake8",
+]
+
+# Minimal deps required by `make test` / `tests/`
+tests = [
+  "pytest",
+  "python-dotenv",
+  "aiohttp",
+  "trl",
+  "latex2sympy2_extended",
+  "math_verify",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
