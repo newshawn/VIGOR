@@ -1,8 +1,10 @@
 #!/bin/bash
 
-source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
+source "$VENV_DIR/bin/activate"
 which python
-cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
+cd "$REPO_ROOT"
 # unset http_proxy
 # unset https_proxy
 # clash on

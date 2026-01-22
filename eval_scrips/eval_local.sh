@@ -6,8 +6,10 @@
 # "checkpoint-" 的子目录都会自动加入评测列表。若不传参数，则使用脚本内
 # 的默认 MODEL 路径（或 MODELS 数组）。
 
-cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
-source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/.venv_lighteval/bin/activate
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv_lighteval}"
+source "$VENV_DIR/bin/activate"
+cd "$REPO_ROOT"
 which python
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export VLLM_ENABLE_V1_MULTIPROCESSING=0   # 新增这一行

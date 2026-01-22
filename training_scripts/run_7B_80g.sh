@@ -1,10 +1,13 @@
 #!/bin/bash
 export NCCL_P2P_DISABLE=1
 # 强制使用容器内共享盘上的 venv，避免落到 /home 挂载的本地 venv
-cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
+source "$VENV_DIR/bin/activate"
+cd "$REPO_ROOT"
 which python
 # 保证源码优先被 import
-export PYTHONPATH=/home/wenxuexiang/projects/Intuitor/open-r1-intuitor/src:${PYTHONPATH:-}
+export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 export HF_HOME=/run/determined/localcq1/xuexiang/dataset/MATH-lighteval/.hf
 export HF_DATASETS_CACHE=$HF_HOME/datasets
 export HF_HUB_CACHE=$HF_HOME/hub
@@ -35,7 +38,6 @@ export WANDB_MODE=online
 export WANDB_BASE_URL=https://api.bandw.top
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export INTUITOR_SKIP_GIT_CHECK=1
 export UPLOAD_WANDB_ARTIFACTS=true        # true: 上传日志等文件到 wandb artifact
 
 # === 手动/环境可配置的续跑参数（默认关闭） ===

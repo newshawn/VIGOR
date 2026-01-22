@@ -61,7 +61,6 @@ frozenlist==1.8.0
 fsspec==2025.9.0
 gguf==0.17.1
 gitdb==4.0.12
-GitPython==3.1.45
 google-ai-generativelanguage==0.6.15
 google-api-core==2.28.1
 google-api-python-client==2.187.0
@@ -69,8 +68,7 @@ google-auth==2.45.0
 google-auth-httplib2==0.3.0
 google-generativeai==0.8.6
 googleapis-common-protos==1.70.0
-grpcio==1.75.0
-grpcio-status==1.71.2
+
 h11==0.16.0
 hf-xet==1.2.0
 hf_transfer==0.1.9
@@ -154,7 +152,6 @@ nvidia-nvjitlink-cu12==12.4.127
 nvidia-nvshmem-cu12==3.3.20
 nvidia-nvtx-cu12==12.4.127
 openai==2.8.1
-opencv-python-headless==4.12.0.88
 opentelemetry-api==1.26.0
 opentelemetry-exporter-otlp==1.26.0
 opentelemetry-exporter-otlp-proto-common==1.26.0
@@ -184,7 +181,7 @@ prometheus_client==0.22.1
 prompt_toolkit==3.0.52
 propcache==0.4.1
 proto-plus==1.27.0
-protobuf==5.29.5
+protobuf<5
 psutil==7.1.3
 ptyprocess==0.7.0
 pure_eval==0.2.3

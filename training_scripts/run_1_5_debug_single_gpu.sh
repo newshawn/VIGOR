@@ -1,7 +1,8 @@
 #!/bin/bash
-cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
-# source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
-# pip install -e /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
+source "$VENV_DIR/bin/activate"
+cd "$REPO_ROOT"
 which python
 
 # unset http_proxy
@@ -18,7 +19,7 @@ export HTTP_PROXY=$http_proxy
 export HTTPS_PROXY=$https_proxy
 export no_proxy="127.0.0.1,localhost,0.0.0.0,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local"
 export NO_PROXY="$no_proxy"
-# export WANDB_BASE_URL="https://api.bandw.top"
+export WANDB_BASE_URL="https://api.bandw.top"
 export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_ENTITY=w597744907-zhejiang-university
 export WANDB_MODE=online
@@ -27,8 +28,7 @@ export INTUITOR_ENABLE_WANDB_GIT_PATCH=1  # upload current git diff via wandb.sa
 export UPLOAD_WANDB_ARTIFACTS=false        # true: 训练结束后上传日志等文件到 wandb artifact
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export CUDA_VISIBLE_DEVICES=2
-export INTUITOR_SKIP_GIT_CHECK=1  # 调试模式下，设置为 1 跳过 Git 检查
+export CUDA_VISIBLE_DEVICES=0
 CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
 MODE=debug                     # 固定为 debug 模式

@@ -34,9 +34,11 @@ MANIFEST
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
-
+.venv/
 # Unit test / coverage reports
 htmlcov/
+# det_yaml/
+# det_yaml_h800/
 .tox/
 .nox/
 .coverage
@@ -129,11 +131,13 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv*/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+openr1_intuitor/
 
 # Spyder project settings
 .spyderproject

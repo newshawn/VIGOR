@@ -1,10 +1,12 @@
 #!/bin/bash
 export NCCL_P2P_DISABLE=1
-source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
+source "$VENV_DIR/bin/activate"
 which python
-cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
+cd "$REPO_ROOT"
 # 保证源码优先被 import
-export PYTHONPATH=/home/wenxuexiang/projects/Intuitor/open-r1-intuitor/src:${PYTHONPATH}
+export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 unset http_proxy
 unset https_proxy
 unset HTTP_PROXY
@@ -23,7 +25,6 @@ export WANDB_API_KEY=4117ed9c927aaa675b1e5c34fe7aebf892ed2009
 export WANDB_MODE=online
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export INTUITOR_SKIP_GIT_CHECK=1
 export UPLOAD_WANDB_ARTIFACTS=true        # true: 上传日志等文件到 wandb artifact
 
 # === 手动/环境可配置的续跑参数（默认关闭） ===

@@ -8,12 +8,7 @@ check_dirs := src tests
 
 # dev dependencies
 install:
-	uv venv openr1 --python 3.11
-	. openr1/bin/activate && uv pip install --upgrade pip && \
-	uv pip install vllm==0.8.4 && \
-	uv pip install setuptools && \
-	uv pip install flash-attn==2.7.4.post1 --no-build-isolation && \
-	GIT_LFS_SKIP_SMUDGE=1 uv pip install -e ".[dev]"
+		./scripts/setup_venv.sh 3.11
 
 style:
 	ruff format --line-length 119 --target-version py310 $(check_dirs) setup.py

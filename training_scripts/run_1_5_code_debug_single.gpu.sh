@@ -1,9 +1,11 @@
 #!/bin/bash
 
-source /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/openr1_intuitor/bin/activate
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
+source "$VENV_DIR/bin/activate"
 # pip install -e /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
 which python
-cd /home/wenxuexiang/projects/Intuitor/open-r1-intuitor
+cd "$REPO_ROOT"
 # unset http_proxy
 # unset https_proxy
 # unset HTTP_PROXY
@@ -28,7 +30,6 @@ export UPLOAD_WANDB_ARTIFACTS=false        # true: 训练结束后上传日志�
 export ACCELERATE_LOG_LEVEL=info
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export CUDA_VISIBLE_DEVICES=3
-export INTUITOR_SKIP_GIT_CHECK=1  # 调试模式下，设置为 1 跳过 Git 检查
 CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
 MODE=debug                     # 固定为 debug 模式
