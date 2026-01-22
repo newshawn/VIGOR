@@ -40,9 +40,12 @@ VIGOR is a verifier-free intrinsic reward for RL post-training that rewards comp
 ## 🚀 Quick Start
 
 ### 💻 Installation
+To run the code in this project, first, create a Python virtual environment using e.g. `uv`.
+To install `uv`, follow the [UV Installation Guide](https://docs.astral.sh/uv/getting-started/installation/).
 ```bash
 INSTALL_PROFILE=gpu SKIP_GIT_LFS_SMUDGE=1 ./scripts/setup_venv.sh 3.11.13 && source .venv/bin/activate
-# remove
+
+# If your environment gets into a bad state, do a clean rebuild:
 rm -rf .venv .uv-cache
 ```
 
