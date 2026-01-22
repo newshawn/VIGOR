@@ -44,21 +44,13 @@ import transformers
 from datasets import load_dataset
 from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint
+from trl import (DataCollatorForCompletionOnlyLM, ModelConfig, ScriptArguments,
+                 SFTTrainer, TrlParser, get_peft_config, setup_chat_format)
 
 from open_r1.configs import SFTConfig
 from open_r1.utils import get_model, get_tokenizer
 from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
-from trl import (
-    DataCollatorForCompletionOnlyLM,
-    ModelConfig,
-    ScriptArguments,
-    SFTTrainer,
-    TrlParser,
-    get_peft_config,
-    setup_chat_format,
-)
-
 
 logger = logging.getLogger(__name__)
 

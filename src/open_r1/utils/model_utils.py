@@ -1,6 +1,6 @@
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer
-
+from transformers import (AutoModelForCausalLM, AutoTokenizer,
+                          PreTrainedTokenizer)
 from trl import ModelConfig, get_kbit_device_map, get_quantization_config
 
 from ..configs import GRPOConfig, SFTConfig

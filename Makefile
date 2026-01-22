@@ -4,6 +4,9 @@
 export PYTHONPATH = src
 
 check_dirs := src tests
+venv_bin := $(if $(wildcard .venv/bin/),.venv/bin,)
+ruff := $(if $(wildcard .venv/bin/ruff),.venv/bin/ruff,ruff)
+isort := $(if $(wildcard .venv/bin/isort),.venv/bin/isort,isort)
 
 
 # dev dependencies
@@ -11,13 +14,12 @@ install:
 		./scripts/setup_venv.sh 3.11
 
 style:
-	ruff format --line-length 119 --target-version py310 $(check_dirs) setup.py
-	isort $(check_dirs) setup.py
+	$(ruff) format --line-length 119 --target-version py310 $(check_dirs) setup.py
+	$(isort) $(check_dirs) setup.py
 
 quality:
-	ruff check --line-length 119 --target-version py310 $(check_dirs) setup.py
-	isort --check-only $(check_dirs) setup.py
-	flake8 --max-line-length 119 $(check_dirs) setup.py
+	$(ruff) check --line-length 119 --target-version py310 $(check_dirs) setup.py
+	$(isort) --check-only $(check_dirs) setup.py
 
 test:
 	pytest -sv --ignore=tests/slow/ tests/

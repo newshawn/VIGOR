@@ -16,20 +16,13 @@
 import unittest
 
 from dotenv import load_dotenv
-from open_r1.configs import GRPOScriptArguments
-from open_r1.rewards import (
-    accuracy_reward,
-    format_reward,
-    get_code_format_reward,
-    get_cosine_scaled_reward,
-    get_repetition_penalty_reward,
-    get_reward_funcs,
-    get_soft_overlong_punishment,
-    len_reward,
-    reasoning_steps_reward,
-    tag_count_reward,
-)
 
+from open_r1.configs import GRPOScriptArguments
+from open_r1.rewards import (accuracy_reward, format_reward,
+                             get_code_format_reward, get_cosine_scaled_reward,
+                             get_repetition_penalty_reward, get_reward_funcs,
+                             get_soft_overlong_punishment, len_reward,
+                             reasoning_steps_reward, tag_count_reward)
 
 load_dotenv()
 

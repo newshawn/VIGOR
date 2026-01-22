@@ -21,7 +21,6 @@ from typing import List, Optional
 
 from ..utils import is_e2b_available, is_morph_available
 
-
 if is_e2b_available():
     from e2b_code_interpreter import AsyncSandbox
     from e2b_code_interpreter.models import Execution

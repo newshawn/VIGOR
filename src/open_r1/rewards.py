@@ -18,23 +18,17 @@
 import asyncio
 import json
 import math
+import random
 import re
 from functools import partial, update_wrapper
 from typing import Callable, Dict, Optional
-
-import random
 
 from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
 
 from .utils.code_providers import get_provider
-from .utils.ioi import (
-    SubtaskResult,
-    add_includes,
-    get_morph_client_from_env,
-    get_piston_client_from_env,
-    score_subtask,
-)
+from .utils.ioi import (SubtaskResult, add_includes, get_morph_client_from_env,
+                        get_piston_client_from_env, score_subtask)
 
 
 def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[Optional[float]]:

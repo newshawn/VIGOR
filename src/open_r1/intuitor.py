@@ -12,25 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.__
 
+import functools
 import logging
 import os
 import sys
-import torch, functools
-# 全局把 torch.load 默认 weights_only=False
-orig_load = torch.load
-torch.load = functools.partial(orig_load, weights_only=False)
+
 import datasets
+import torch
 import transformers
 from datasets import load_dataset
 from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint
+from trl import ModelConfig, TrlParser, get_peft_config
+
 from open_r1.configs import GRPOConfig, GRPOScriptArguments
+from open_r1.intuitor_trainer import INTUITORTrainer
 from open_r1.rewards import get_reward_funcs
 from open_r1.utils import get_model, get_tokenizer
 from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
-from trl import ModelConfig, TrlParser, get_peft_config
-from open_r1.intuitor_trainer import INTUITORTrainer
+
+# 全局把 torch.load 默认 weights_only=False
+_orig_torch_load = torch.load
+torch.load = functools.partial(_orig_torch_load, weights_only=False)
 
 
 logger = logging.getLogger(__name__)

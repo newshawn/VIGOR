@@ -31,45 +31,41 @@ import numpy as np
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
+from accelerate.utils import (broadcast_object_list, gather, gather_object,
+                              is_peft_model, set_seed)
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
 from torch.utils.data import DataLoader, Sampler
-from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    GenerationConfig,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-    Trainer,
-    TrainerCallback,
-    is_wandb_available,
-)
+from transformers import (AutoModelForCausalLM,
+                          AutoModelForSequenceClassification, AutoTokenizer,
+                          GenerationConfig, PreTrainedModel,
+                          PreTrainedTokenizerBase, Trainer, TrainerCallback,
+                          is_wandb_available)
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_callback import ExportableState
+
 try:
     from transformers.trainer_utils import TRAINER_STATE_NAME
 except ImportError:  # transformers<4.53
     from transformers.trainer import TRAINER_STATE_NAME
+
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
-from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from trl.data_utils import (apply_chat_template, is_conversational,
+                            maybe_apply_chat_template)
 from trl.extras.profiling import profiling_context, profiling_decorator
 from trl.extras.vllm_client import VLLMClient
-from trl.import_utils import is_liger_kernel_available, is_rich_available, is_vllm_available
-from trl.models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
+from trl.import_utils import (is_liger_kernel_available, is_rich_available,
+                              is_vllm_available)
+from trl.models import (create_reference_model, prepare_deepspeed,
+                        unwrap_model_for_generation)
 from trl.trainer.callbacks import SyncRefModelCallback
 from trl.trainer.grpo_config import GRPOConfig
-from trl.trainer.utils import (
-    disable_dropout_in_model,
-    generate_model_card,
-    get_comet_experiment_url,
-    pad,
-    print_prompt_completions_sample,
-    selective_log_softmax,
-)
+from trl.trainer.utils import (disable_dropout_in_model, generate_model_card,
+                               get_comet_experiment_url, pad,
+                               print_prompt_completions_sample,
+                               selective_log_softmax)
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -81,7 +77,8 @@ if is_wandb_available():
     import wandb
 
 try:
-    from torch.utils.tensorboard import SummaryWriter as _TorchSummaryWriter  # type: ignore
+    from torch.utils.tensorboard import \
+        SummaryWriter as _TorchSummaryWriter  # type: ignore
 except Exception:  # pragma: no cover
     _TorchSummaryWriter = None
 
@@ -596,7 +593,7 @@ class INTUITORTrainer(Trainer):
             )
         ):
             # See https://github.com/huggingface/trl/issues/3213
-            raise NotImplemeantedError(
+            raise NotImplementedError(
                 "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
             )
 

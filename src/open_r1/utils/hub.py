@@ -18,20 +18,12 @@ import logging
 import re
 from concurrent.futures import Future
 
+from huggingface_hub import (create_branch, create_repo,
+                             get_safetensors_metadata, list_repo_commits,
+                             list_repo_files, list_repo_refs, repo_exists,
+                             upload_folder)
 from transformers import AutoConfig
-
-from huggingface_hub import (
-    create_branch,
-    create_repo,
-    get_safetensors_metadata,
-    list_repo_commits,
-    list_repo_files,
-    list_repo_refs,
-    repo_exists,
-    upload_folder,
-)
 from trl import GRPOConfig, SFTConfig
-
 
 logger = logging.getLogger(__name__)
 
