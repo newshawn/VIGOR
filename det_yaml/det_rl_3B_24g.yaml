@@ -40,4 +40,4 @@ searcher:
 profiling:
   enabled: true
 
-entrypoint: /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/training_scripts/run_3B_24G.sh
+entrypoint: ./training_scripts/run_3B_24G.sh

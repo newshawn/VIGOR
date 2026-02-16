@@ -64,7 +64,7 @@ KL_REWARD_RANK_NORMALIZATION_ENABLED=true
 KL_ENTROPY_WEIGHTING_ENABLED=false
 KL_ENTROPY_FOCAL_LAMBDA=0.1
 SAVE_ONLY_MODEL=true
-SAVE_TOP_K=5
+SAVE_TOP_K=3
 SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
 # GPU 分配策略
 # - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3 共 3 卡
@@ -161,6 +161,10 @@ else
     RUN_LOG_FILE="${LOG_DIR}/run_${LOG_PREFIX}_${RUN_LAUNCH_TS}.log"
 fi
 VLLM_LOG_FILE="${LOG_DIR}/vllm-server.log"
+
+# 从这里开始，脚本日志同时输出到终端和 RUN_LOG_FILE
+exec > >(tee -a "$RUN_LOG_FILE")
+exec 2> >(tee -a "$RUN_LOG_FILE" >&2)
 
 # 进程清理：确保退出时回收 vLLM 和监控进程，避免僵尸
 
@@ -267,8 +271,7 @@ if command -v stdbuf >/dev/null 2>&1; then
       --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
       --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
       --kl_entropy_weighting_enabled $KL_ENTROPY_WEIGHTING_ENABLED \
-      --kl_entropy_focal_lambda $KL_ENTROPY_FOCAL_LAMBDA \
-      2>&1 | tee "$RUN_LOG_FILE"
+      --kl_entropy_focal_lambda $KL_ENTROPY_FOCAL_LAMBDA
 else
   env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
       accelerate launch --config_file $ACCELERATE_CONFIG_FILE --num_processes=$NUM_PROCESSES \
@@ -280,10 +283,9 @@ else
       --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
       --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
       --kl_entropy_weighting_enabled $KL_ENTROPY_WEIGHTING_ENABLED \
-      --kl_entropy_focal_lambda $KL_ENTROPY_FOCAL_LAMBDA \
-      2>&1 | tee "$RUN_LOG_FILE"
+      --kl_entropy_focal_lambda $KL_ENTROPY_FOCAL_LAMBDA
 fi
-TRAIN_EXIT_CODE=${PIPESTATUS[0]}
+TRAIN_EXIT_CODE=$?
 
 echo "Training finished with exit code: $TRAIN_EXIT_CODE"
 echo "Logs: ${VLLM_LOG_FILE} and ${RUN_LOG_FILE}"

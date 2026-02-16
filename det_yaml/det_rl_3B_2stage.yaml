@@ -1,4 +1,4 @@
-name: 10h_sft
+name: 16h_intuitor_3B_48g_math
 description: test
 workspace: ALL-IN-ONE
 project: Intuitor
@@ -7,7 +7,7 @@ max_restarts: 0
 # 只需要修改pool和gpu数量
 resources:
   resource_pool: amp-48g
-  slots_per_trial: 1
+  slots_per_trial: 4
   is_single_node: true
   shm_size: 34359738368
 
@@ -40,7 +40,7 @@ searcher:
 profiling:
   enabled: true
 
-# entrypoint: ./training_scripts/run_sft_7B.sh
+# entrypoint: ./training_scripts/run_3B_48G_intuitor_grpo_2stage.sh
 entrypoint: >
   bash -lc "
     clash on
@@ -50,5 +50,5 @@ entrypoint: >
     export HTTPS_PROXY=$https_proxy
     export no_proxy='127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local'
     export NO_PROXY=$no_proxy
-    exec ./training_scripts/run_sft_7B.sh
+    exec ./training_scripts/run_3B_48G_intuitor_grpo_2stage.sh
   "

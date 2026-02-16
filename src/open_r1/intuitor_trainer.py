@@ -19,6 +19,7 @@ import math
 import os
 import shutil
 import textwrap
+import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
@@ -650,6 +651,10 @@ class INTUITORTrainer(Trainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._cumulative_time_sec = {
+            "train": {"rollout": 0.0, "reward": 0.0},
+            "eval": {"rollout": 0.0, "reward": 0.0},
+        }
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
         self.log_completions = False
@@ -1240,6 +1245,11 @@ class INTUITORTrainer(Trainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
+        def _sync_and_now() -> float:
+            if torch.cuda.is_available() and device.type == "cuda":
+                torch.cuda.synchronize(device=device)
+            return time.perf_counter()
+
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
@@ -1253,6 +1263,7 @@ class INTUITORTrainer(Trainer):
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
         # Generate completions using either vLLM or regular generation
+        rollout_start = _sync_and_now()
         if self.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
@@ -1335,10 +1346,12 @@ class INTUITORTrainer(Trainer):
         if self.mask_truncated_completions:
             truncated_completions = ~is_eos.any(dim=1)
             completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
+        rollout_sec_local = _sync_and_now() - rollout_start
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
         # 计算kl奖励，并返回每个 completion 的平均熵/对数似然（后续用于日志/指标）
+        reward_start = _sync_and_now()
         neg_grad_L2, completion_entropies, completion_logps, completion_p_norms = self._compute_gradient_kl_reward(
             self.model, prompt_ids, prompt_mask, completion_ids, completion_mask
         )
@@ -1541,12 +1554,23 @@ class INTUITORTrainer(Trainer):
         std_kl_rewards = std_kl_rewards[process_slice]
         kl_advantage = (kl_rewards - mean_kl_rewards) / (std_kl_rewards + 1e-4)        # 逐个元素相减，计算 KL 奖励的优势
         total_advantage = kl_advantage + advantages
+        reward_sec_local = _sync_and_now() - reward_start
+        rollout_sec_global = self.accelerator.gather_for_metrics(
+            torch.tensor([rollout_sec_local], device=device, dtype=torch.float32)
+        ).max().item()
+        reward_sec_global = self.accelerator.gather_for_metrics(
+            torch.tensor([reward_sec_local], device=device, dtype=torch.float32)
+        ).max().item()
         # if self.accelerator.process_index == 0:  # 或其它 rank
         #     import pdb; pdb.set_trace()
         # Log the metrics
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
+        self._cumulative_time_sec[mode]["rollout"] += rollout_sec_global
+        self._cumulative_time_sec[mode]["reward"] += reward_sec_global
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
+        self._metrics[mode]["time/rollout_sec_cumulative"] = [self._cumulative_time_sec[mode]["rollout"]]
+        self._metrics[mode]["time/reward_sec_cumulative"] = [self._cumulative_time_sec[mode]["reward"]]
 
         # log completion lengths, mean, min, max
         agg_completion_mask = self.accelerator.gather_for_metrics(completion_mask.sum(1))

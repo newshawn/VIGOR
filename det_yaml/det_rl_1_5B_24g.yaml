@@ -40,7 +40,7 @@ searcher:
 profiling:
   enabled: true
 
-# entrypoint: /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/training_scripts/run_3B_48G_lora.sh
+# entrypoint: ./training_scripts/run_1_5B.sh
 entrypoint: >
   bash -lc "
     clash on

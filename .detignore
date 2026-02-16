@@ -3,6 +3,9 @@ data/
 wandb/
 run_intuitor.log
 *.log
+.uv-cache/
+.github/
+assets/
 logs/
 det_yaml/
 .venv_lighteval/

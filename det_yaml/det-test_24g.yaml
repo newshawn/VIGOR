@@ -50,5 +50,5 @@ entrypoint: >
     export HTTPS_PROXY=$https_proxy
     export no_proxy='127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local'
     export NO_PROXY=$no_proxy
-    exec /home/wenxuexiang/projects/Intuitor/open-r1-intuitor/training_scripts/run_1_5_debug_single_gpu.sh
+    exec ./training_scripts/run_1_5_debug_single_gpu.sh
   "

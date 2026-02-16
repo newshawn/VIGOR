@@ -39,10 +39,10 @@ MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
 SAVE_TOTAL_LIMIT=15 # 控制最多保留的 checkpoint 数量，当SAVE_STRATEGY="no"时无效
 SAVE_STRATEGY="steps" # "no" top-k; "steps" “每 N 步保存”的逻辑
-SAVE_TOP_K=0
+SAVE_TOP_K=2
 SAVE_TOP_K_METRIC="rewards/accuracy_reward/mean"
 SAVE_TOP_K_GREATER_IS_BETTER=true
-SAVE_RESUME_STEPS=0 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
+SAVE_RESUME_STEPS=30 # 每 N 步覆盖保存 checkpoint-last（包含训练状态），0 表示关闭
 LOGGING_STEPS=3 # 训练日志记录步数间隔（配合 logging_strategy=steps）
 MAX_COMPLETION_LENGTH=1024 # completion 最大长度（覆盖 YAML 里的 max_completion_length）
 KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
@@ -151,6 +151,9 @@ LOGGING_STEPS: $LOGGING_STEPS
 MAX_COMPLETION_LENGTH: $MAX_COMPLETION_LENGTH
 KL_REWARD_SQRT_LEN_SCALING_ENABLED: $KL_REWARD_SQRT_LEN_SCALING_ENABLED
 KL_REWARD_RANK_NORMALIZATION_ENABLED: $KL_REWARD_RANK_NORMALIZATION_ENABLED
+KL_REWARD_GRAD_NORM_TYPE: $KL_REWARD_GRAD_NORM_TYPE
+KL_REWARD_PARAM_SCOPE: $KL_REWARD_PARAM_SCOPE
+KL_REWARD_LAST_N_LAYERS: $KL_REWARD_LAST_N_LAYERS
 RESUME_MODE: $RESUME_MODE
 RESUME_FROM_CHECKPOINT: $RESUME_FROM_CHECKPOINT
 WANDB_RUN_ID: $WANDB_RUN_ID
@@ -206,6 +209,9 @@ nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER --save_resume_steps $SAVE_RESUME_STEPS \
     --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
     --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
+    --kl_reward_grad_norm_type $KL_REWARD_GRAD_NORM_TYPE \
+    --kl_reward_param_scope $KL_REWARD_PARAM_SCOPE \
+    --kl_reward_last_n_layers $KL_REWARD_LAST_N_LAYERS \
     $RESUME_ARGS $EXTRA_ARGS \
     > "$RUN_LOG_FILE" 2>&1 &
 TRAINING_PID=$!

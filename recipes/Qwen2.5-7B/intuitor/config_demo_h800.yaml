@@ -34,7 +34,7 @@ max_completion_length: 1024
 max_steps: -1
 num_generations: 8
 num_train_epochs: 1
-num_iterations: 3
+num_iterations: 1
 output_dir: /run/determined/localcq1/xuexiang/Intuitor_ckpt/Qwen2.5-Intuitor-7B
 overwrite_output_dir: true
 per_device_eval_batch_size: 4
