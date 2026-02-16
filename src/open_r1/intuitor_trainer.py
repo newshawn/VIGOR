@@ -977,6 +977,45 @@ class INTUITORTrainer(Trainer):
             return self._kl_reward_params_cache
 
         unwrap_model = self.accelerator.unwrap_model(model)
+        if bool(getattr(self.args, "kl_reward_lm_head_only", False)):
+            selected_params: list[torch.nn.Parameter] = []
+            selected_param_ids: set[int] = set()
+
+            output_embeddings = None
+            if hasattr(unwrap_model, "get_output_embeddings"):
+                output_embeddings = unwrap_model.get_output_embeddings()
+            if output_embeddings is not None:
+                for param in output_embeddings.parameters():
+                    if not param.requires_grad:
+                        continue
+                    param_id = id(param)
+                    if param_id in selected_param_ids:
+                        continue
+                    selected_params.append(param)
+                    selected_param_ids.add(param_id)
+
+            if not selected_params:
+                for name, param in unwrap_model.named_parameters():
+                    if not param.requires_grad:
+                        continue
+                    if "lm_head" not in name.lower():
+                        continue
+                    param_id = id(param)
+                    if param_id in selected_param_ids:
+                        continue
+                    selected_params.append(param)
+                    selected_param_ids.add(param_id)
+
+            if not selected_params:
+                raise ValueError(
+                    "`kl_reward_lm_head_only=True` but no trainable LM head parameters were found. "
+                    "This flag only affects KL reward computation. Please ensure lm_head is trainable "
+                    "(e.g., include lm_head in modules_to_save for LoRA) or disable this flag."
+                )
+
+            self._kl_reward_params_cache = selected_params
+            return self._kl_reward_params_cache
+
         lora_params: list[torch.nn.Parameter] = []
         fallback_params: list[torch.nn.Parameter] = []
         for name, param in unwrap_model.named_parameters():

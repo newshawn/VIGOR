@@ -96,6 +96,13 @@ class GRPOConfig(trl.GRPOConfig):
             "help": "If True, rank-normalize KL rewards within each prompt group to the [-1, 1] range."
         },
     )
+    kl_reward_lm_head_only: bool = field(
+        default=False,
+        metadata={
+            "help": "If True, compute KL reward gradient norm using only trainable LM head parameters. "
+            "This affects reward estimation only and does not change optimizer update parameter scope."
+        },
+    )
 
     hub_model_revision: Optional[str] = field(
         default="main", metadata={"help": "The Hub model branch to push the model to."}

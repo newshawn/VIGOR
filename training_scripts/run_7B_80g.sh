@@ -61,6 +61,7 @@ LOGGING_STEPS=5
 MAX_COMPLETION_LENGTH=3072
 KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
 KL_REWARD_RANK_NORMALIZATION_ENABLED=true
+KL_REWARD_LM_HEAD_ONLY=true
 KL_ENTROPY_WEIGHTING_ENABLED=false
 KL_ENTROPY_FOCAL_LAMBDA=0.1
 SAVE_ONLY_MODEL=true
@@ -202,6 +203,7 @@ SAVE_ONLY_MODEL: $SAVE_ONLY_MODEL
 SAVE_TOP_K: $SAVE_TOP_K
 SAVE_TOP_K_METRIC: $SAVE_TOP_K_METRIC
 SAVE_TOP_K_GREATER_IS_BETTER: $SAVE_TOP_K_GREATER_IS_BETTER
+KL_REWARD_LM_HEAD_ONLY: $KL_REWARD_LM_HEAD_ONLY
 EXTRA_ARGS: ${EXTRA_ARGS:-}
 RESUME_MODE: $RESUME_MODE
 WANDB_RUN_ID: $WANDB_RUN_ID
@@ -270,6 +272,7 @@ if command -v stdbuf >/dev/null 2>&1; then
       --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER $EXTRA_ARGS \
       --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
       --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
+      --kl_reward_lm_head_only $KL_REWARD_LM_HEAD_ONLY \
       --kl_entropy_weighting_enabled $KL_ENTROPY_WEIGHTING_ENABLED \
       --kl_entropy_focal_lambda $KL_ENTROPY_FOCAL_LAMBDA
 else
@@ -282,6 +285,7 @@ else
       --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER $EXTRA_ARGS \
       --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
       --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
+      --kl_reward_lm_head_only $KL_REWARD_LM_HEAD_ONLY \
       --kl_entropy_weighting_enabled $KL_ENTROPY_WEIGHTING_ENABLED \
       --kl_entropy_focal_lambda $KL_ENTROPY_FOCAL_LAMBDA
 fi
