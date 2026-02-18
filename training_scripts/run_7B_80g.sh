@@ -47,21 +47,21 @@ export WANDB_RESUME=allow
 export WANDB_RUN_ID=c78lq7y8       # 续跑时填入要续写的 wandb run id
 
 num_generations=8 # 作者使用7，但是3卡时候用7会犯错
-EXP_TYPE=intuitor  # 可选值: intuitor 或 grpo
+EXP_TYPE=grpo  # 可选值: intuitor 或 grpo
 ACCELERATE_CONFIG_FILE="recipes/accelerate_configs/zero2.yaml"
 MAX_STEPS=-1    # 可选 -1 或者具体步数
 START_VLLM=true # true: 1卡 vLLM + 3卡训练；false: 4卡训练
 ### 传统的保存方式，如果SAVE_STRATEGY="yes"，则会按照SAVE_STEPS保存checkpoint，否则只保存top-K的accuracy_reward的ckpt
 SAVE_TOTAL_LIMIT=20 # 控制最多保留的 checkpoint 数量
 SAVE_STEPS=20      # checkpoint 间隔步数
-SAVE_STRATEGY="no" # 使用 top-k 保存时关闭定期保存
+SAVE_STRATEGY="yes" # 使用 top-k 保存时关闭定期保存
 ### 保存top-K的ckpt，默认保存accuracy_reward/mean最大的ckpt，并且不保存优化器，每LOGGING_STEPS更新一次top-K
 SAVE_TOP_K_GREATER_IS_BETTER=true
 LOGGING_STEPS=5
-MAX_COMPLETION_LENGTH=3072
+MAX_COMPLETION_LENGTH=1024
 KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
 KL_REWARD_RANK_NORMALIZATION_ENABLED=true
-KL_REWARD_LM_HEAD_ONLY=true
+KL_REWARD_LM_HEAD_ONLY=false    # 是否仅用语言模型头计算 KL 奖励，以降低计算成本
 KL_ENTROPY_WEIGHTING_ENABLED=false
 KL_ENTROPY_FOCAL_LAMBDA=0.1
 SAVE_ONLY_MODEL=true

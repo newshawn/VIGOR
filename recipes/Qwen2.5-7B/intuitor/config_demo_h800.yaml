@@ -48,6 +48,6 @@ reward_weights:
 - 0.0 # Include accuracy reward for monitorying purpose, remove reward_funcs and reward_weights for open-generation RL
 save_strategy: "steps"
 save_total_limit: 20
-save_steps: 20
+save_steps: 10
 seed: 7
 warmup_ratio: 0.1

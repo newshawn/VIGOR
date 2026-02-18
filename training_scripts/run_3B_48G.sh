@@ -12,9 +12,9 @@ unset https_proxy
 unset HTTP_PROXY
 unset HTTPS_PROXY
 # clash off
-export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
-export PATH=/usr/local/cuda-12.4/bin:${PATH} 
-export CUDA_HOME=/usr/local/cuda-12.4
+export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH}
+export PATH=/usr/local/cuda-12.8/bin:${PATH} 
+export CUDA_HOME=/usr/local/cuda-12.8
 export http_proxy=http://127.0.0.1:18093
 export https_proxy=http://127.0.0.1:18093
 export HTTP_PROXY=$http_proxy
@@ -47,6 +47,7 @@ LOGGING_STEPS=3 # 训练日志记录步数间隔（配合 logging_strategy=steps
 MAX_COMPLETION_LENGTH=1024 # completion 最大长度（覆盖 YAML 里的 max_completion_length）
 KL_REWARD_SQRT_LEN_SCALING_ENABLED=true
 KL_REWARD_RANK_NORMALIZATION_ENABLED=true
+KL_REWARD_LM_HEAD_ONLY=true    # 是否仅用语言模型头计算 KL 奖励，以降低计算成本
 
 # GPU 分配策略
 # - START_VLLM=true: vLLM 使用 GPU 0；训练用 1,2,3共 3 卡
@@ -151,9 +152,7 @@ LOGGING_STEPS: $LOGGING_STEPS
 MAX_COMPLETION_LENGTH: $MAX_COMPLETION_LENGTH
 KL_REWARD_SQRT_LEN_SCALING_ENABLED: $KL_REWARD_SQRT_LEN_SCALING_ENABLED
 KL_REWARD_RANK_NORMALIZATION_ENABLED: $KL_REWARD_RANK_NORMALIZATION_ENABLED
-KL_REWARD_GRAD_NORM_TYPE: $KL_REWARD_GRAD_NORM_TYPE
-KL_REWARD_PARAM_SCOPE: $KL_REWARD_PARAM_SCOPE
-KL_REWARD_LAST_N_LAYERS: $KL_REWARD_LAST_N_LAYERS
+KL_REWARD_LM_HEAD_ONLY: $KL_REWARD_LM_HEAD_ONLY
 RESUME_MODE: $RESUME_MODE
 RESUME_FROM_CHECKPOINT: $RESUME_FROM_CHECKPOINT
 WANDB_RUN_ID: $WANDB_RUN_ID
@@ -209,9 +208,7 @@ nohup env CUDA_VISIBLE_DEVICES=$CUDA_DEVICES ACCELERATE_LOG_LEVEL=info \
     --save_strategy $SAVE_STRATEGY --save_top_k $SAVE_TOP_K --save_top_k_metric "$SAVE_TOP_K_METRIC" --save_top_k_greater_is_better $SAVE_TOP_K_GREATER_IS_BETTER --save_resume_steps $SAVE_RESUME_STEPS \
     --kl_reward_sqrt_len_scaling_enabled $KL_REWARD_SQRT_LEN_SCALING_ENABLED \
     --kl_reward_rank_normalization_enabled $KL_REWARD_RANK_NORMALIZATION_ENABLED \
-    --kl_reward_grad_norm_type $KL_REWARD_GRAD_NORM_TYPE \
-    --kl_reward_param_scope $KL_REWARD_PARAM_SCOPE \
-    --kl_reward_last_n_layers $KL_REWARD_LAST_N_LAYERS \
+    --kl_reward_lm_head_only $KL_REWARD_LM_HEAD_ONLY \
     $RESUME_ARGS $EXTRA_ARGS \
     > "$RUN_LOG_FILE" 2>&1 &
 TRAINING_PID=$!
