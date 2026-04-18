@@ -10,12 +10,18 @@ import transformers
 from packaging import version
 from transformers import Trainer
 from trl import GRPOTrainer
-from trl.trainer.grpo_trainer import (apply_chat_template,
-                                      broadcast_object_list, gather,
-                                      gather_object, is_conversational,
-                                      maybe_apply_chat_template, nanstd, pad,
-                                      profiling_context,
-                                      unwrap_model_for_generation)
+from trl.trainer.grpo_trainer import (
+    apply_chat_template,
+    broadcast_object_list,
+    gather,
+    gather_object,
+    is_conversational,
+    maybe_apply_chat_template,
+    nanstd,
+    pad,
+    profiling_context,
+    unwrap_model_for_generation,
+)
 
 
 class GRPOTopKTrainer(GRPOTrainer):
