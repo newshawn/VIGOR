@@ -2,18 +2,20 @@
 
 # VIGOR
 
-[![Project Website](https://img.shields.io/badge/🌐-Project%20Website-deepgray)](https://ZJUSCL.github.io/XXX/)
+<!-- [![Project Website](https://img.shields.io/badge/🌐-Project%20Website-deepgray)](https://ZJUSCL.github.io/XXX/)
 [![arXiv](https://img.shields.io/badge/arXiv-XXX.XXX-b31b1b.svg)](https://arxiv.org/abs/XXX.XXX)
 [![Model](https://img.shields.io/badge/🤗-Model-yellow)](https://huggingface.co/collections/ZJUSCL/XXX)
-[![Dataset](https://img.shields.io/badge/🤗-Dataset-green)](https://huggingface.co/datasets/ZJUSCL/XXX)
+[![Dataset](https://img.shields.io/badge/🤗-Dataset-green)](https://huggingface.co/datasets/ZJUSCL/XXX) -->
 </div>
 
 
 ## 📖 Introduction
 
-This is the official implementation for the paper: [xxxx](https://arxiv.org/xxxx).
+This is the official implementation for the paper: Verifier-Free RL for LLMs via Intrinsic Gradient-Norm Reward.
 
-VIGOR is a verifier-free intrinsic reward for RL post-training that rewards completions with smaller per-sample gradient norms, stabilized by √T length correction and rank-based normalization..
+VIGOR is a verifier-free intrinsic reward for RL post-training that rewards completions with smaller per-sample gradient norms, stabilized by a $\sqrt{T}$ length correction and rank-based normalization.
+
+
 
 <p align="center">
   <img src="assets/teaser.png" alt="Teaser" width="900"/>
@@ -21,7 +23,8 @@ VIGOR is a verifier-free intrinsic reward for RL post-training that rewards comp
 
 
 ## 📰 News
-- **[2026-01-21]** 🎉 We initialize the official code of VIGOR.
+- **[2026-04]** 🎉 Our paper has been accepted to Findings of ACL 2026.
+- **[2026-01]** 🎉 We initialize the official code of VIGOR.
 
 <!-- TODO List -->
 <!-- ## 🚧 TODO List
@@ -113,7 +116,7 @@ Here we report results for Qwen2.5-7B-Base trained on the MATH dataset. We use g
 
 
 
----
+<!-- ---
 
 
 ## 📚 Citation
@@ -129,4 +132,4 @@ Please kindly cite our paper if you use our code, data, models or results:
 
 ## 🙏 Acknowledgements
 
-We would like to thank the xxx.
+We would like to thank the xxx. -->
