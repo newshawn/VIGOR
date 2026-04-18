@@ -1,6 +1,6 @@
 <div align="center">
 
-# VIGOR
+# VIGOR: Verifier-Free RL for LLMs via Intrinsic Gradient-Norm Reward
 
 <!-- [![Project Website](https://img.shields.io/badge/🌐-Project%20Website-deepgray)](https://ZJUSCL.github.io/XXX/)
 [![arXiv](https://img.shields.io/badge/arXiv-XXX.XXX-b31b1b.svg)](https://arxiv.org/abs/XXX.XXX)
