@@ -183,3 +183,11 @@ slurm/
 
 .vscode/
 .python-version
+
+# Local-only utility files
+.detignore
+.gitattributes
+Makefile
+extract_pdf.py
+upload_model.py
+upload_model.sh
